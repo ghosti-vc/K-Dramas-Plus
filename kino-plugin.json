@@ -1,8 +1,7 @@
-
 {
   "id": "k-dramas-plus",
   "name": "K Dramas Plus",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "apiVersion": 9,
   "entry": "plugin.js",
   "icon": "icon.png",
@@ -19,7 +18,7 @@
   ],
   "fetchHosts": "any",
   "streamHosts": "any",
-  "browser": true,
+  "browser": "pages",
   "capabilities": ["search", "home", "episodes", "browse", "resolve", "download"],
   "settings": [
     {
