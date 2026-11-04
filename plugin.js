@@ -1,4 +1,5 @@
 
+
 // K Dramas Plus — Dorama Express para Kino
 // apiVersion 9 · busca, Inicio, episodios, servidores por idioma, descargas
 
@@ -94,9 +95,18 @@ export async function search(arg) {
   return items;
 }
 
+async function fetchHomeHtml() {
+  try {
+    return await fetchPage("/");
+  } catch (e) {
+    // la portada a veces vive en /home/ o falla un momento
+    return await fetchPage("/home/");
+  }
+}
+
 // ---------- home ----------
 export async function home() {
-  const html = await fetchPage("/");
+  const html = await fetchHomeHtml();
   const rows = [];
   const destacadas = sectionOf(html, "Series Destacadas");
   if (destacadas) {
@@ -127,6 +137,16 @@ export async function home() {
       title: t("Películas nuevas", "New movies"),
       genre: "peliculas",
       ref: "movies",
+      items: items,
+    });
+  }
+  // refuerzo: si las secciones cambiaron de nombre, usa lo que haya en la página
+  if (!rows.length) {
+    const items = parseItems(html, ["serie", "movies"], 30);
+    if (items.length) rows.push({
+      id: "destacadas",
+      title: t("Destacados de Dorama Express", "Dorama Express picks"),
+      genre: "doramas",
       items: items,
     });
   }
