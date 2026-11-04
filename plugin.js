@@ -1,5 +1,7 @@
 // K Dramas Plus — Dorama Express para Kino
 // apiVersion 9 · busca, Inicio, episodios, servidores por idioma, descargas
+// v0.1.4: lista, búsqueda e Inicio solo muestran títulos de la colección "K-Dramas Latino" (ajuste, activado por defecto).
+// v0.1.3: con "Latino" (por defecto) solo se usan servidores en español latino.
 // v0.1.2: camino rápido (enlace .m3u8 directo, servidores en paralelo) antes del navegador oculto,
 //         y recuerda el último servidor que funcionó.
 // v0.1.1: lectura de páginas con respaldo por el navegador oculto (kino.browser.page)
@@ -148,16 +150,91 @@ function sectionOf(html, name) {
   return null;
 }
 
+// ---------- solo títulos en español latino ----------
+// Se usa la colección "K-Dramas Latino" del sitio como lista de títulos que sí tienen audio latino.
+const LATINO_PATH = "/coleccion/kdramas-latino/";
+let latinoMemo = null;
+
+function onlyLatinoTitles() {
+  try {
+    if (typeof kino.config === "object" && typeof kino.config.get === "function") {
+      const v = kino.config.get("onlyLatinoTitles");
+      if (v === false || v === "false") return false;
+    }
+  } catch (e) {}
+  return true;
+}
+
+// página con kino.fetch simple: texto, "" si no existe (404) o null si falló
+async function quickPage(path) {
+  try {
+    const r = await kino.fetch(BASE + path, { headers: requestHeaders() });
+    if (r.status === 404) return "";
+    if (r.ok && !isCheckPage(r.text)) return r.text;
+  } catch (e) {}
+  return null;
+}
+
+// { "serie/slug": true, ... } con toda la colección, o null si no se pudo leer completa
+async function loadLatinoSet() {
+  if (latinoMemo && Date.now() - latinoMemo.at < 1800000) return latinoMemo.refs;
+  const refs = {};
+  let complete = false;
+  for (let start = 1; start <= 12 && !complete; start += 6) {
+    const batch = [];
+    for (let p = start; p < start + 6; p++) batch.push(LATINO_PATH + (p > 1 ? "page/" + p + "/" : ""));
+    const pages = await Promise.all(batch.map(quickPage));
+    for (let i = 0; i < pages.length; i++) {
+      if (pages[i] === null) return null;
+      const items = pages[i] ? parseItems(pages[i], ["serie", "movies"], 100) : [];
+      if (!items.length) { complete = true; break; }
+      items.forEach(function (it) { refs[it.ref] = true; });
+    }
+  }
+  if (!complete || !Object.keys(refs).length) return null;
+  latinoMemo = { at: Date.now(), refs: refs };
+  return refs;
+}
+
+function prefetchLatino() {
+  if (wantedLang() !== "latino" || !onlyLatinoTitles()) return null;
+  return loadLatinoSet().catch(function () { return null; });
+}
+
+// deja solo los títulos de la colección latino; si no se pudo leer la colección, no filtra
+async function keepLatino(items, pre) {
+  if (!items || !items.length) return items;
+  if (wantedLang() !== "latino" || !onlyLatinoTitles()) return items;
+  let refs = null;
+  try { refs = pre ? await pre : await loadLatinoSet(); } catch (e) { refs = null; }
+  if (!refs) return items;
+  let hasSerie = false;
+  let hasMovie = false;
+  Object.keys(refs).forEach(function (k) {
+    if (k.indexOf("movies/") === 0) hasMovie = true; else hasSerie = true;
+  });
+  return items.filter(function (it) {
+    const isMovie = it.ref.indexOf("movies/") === 0;
+    if (isMovie && !hasMovie) return true;   // la colección no trae películas: no se filtran
+    if (!isMovie && !hasSerie) return true;
+    return !!refs[it.ref];
+  });
+}
+
 // ---------- search ----------
 export async function search(arg) {
   await Promise.resolve();
   const query = (arg && typeof arg === "object" ? arg.q : arg) || "";
   if (!query.trim()) return [];
   // search tiene 15 s en total: el navegador oculto se limita a ~9 s
+  const pre = prefetchLatino();
   const html = await fetchPage("/?s=" + encodeURIComponent(query.trim()), 9000);
-  const items = parseItems(html, ["serie", "movies"], 100);
+  const all = parseItems(html, ["serie", "movies"], 100);
+  const items = await keepLatino(all, pre);
   if (!items.length) throw kino.error("not_found", "sin resultados", {
-    userMessage: t("No encontré nada con ese nombre.", "I found nothing by that name."),
+    userMessage: all.length
+      ? t("Encontré ese título, pero no está en español latino.", "I found that title, but it is not in Latin Spanish.")
+      : t("No encontré nada con ese nombre.", "I found nothing by that name."),
   });
   return items;
 }
@@ -174,11 +251,12 @@ async function fetchHomeHtml() {
 
 // ---------- home ----------
 export async function home() {
+  const pre = prefetchLatino();
   const html = await fetchHomeHtml();
   const rows = [];
   const destacadas = sectionOf(html, "Series Destacadas");
   if (destacadas) {
-    const items = parseItems(destacadas, ["serie"], 30);
+    const items = await keepLatino(parseItems(destacadas, ["serie"], 30), pre);
     if (items.length) rows.push({
       id: "destacadas",
       title: t("Series destacadas", "Featured series"),
@@ -188,7 +266,7 @@ export async function home() {
   }
   const dramas = sectionOf(html, "Últimos dramas");
   if (dramas) {
-    const items = parseItems(dramas, ["serie"], 30);
+    const items = await keepLatino(parseItems(dramas, ["serie"], 30), pre);
     if (items.length) rows.push({
       id: "dramas",
       title: t("Doramas nuevos", "New dramas"),
@@ -199,7 +277,7 @@ export async function home() {
   }
   const peliculas = sectionOf(html, "Últimas películas");
   if (peliculas) {
-    const items = parseItems(peliculas, ["movies"], 30);
+    const items = await keepLatino(parseItems(peliculas, ["movies"], 30), pre);
     if (items.length) rows.push({
       id: "peliculas",
       title: t("Películas nuevas", "New movies"),
@@ -210,7 +288,7 @@ export async function home() {
   }
   // refuerzo: si las secciones cambiaron de nombre, usa lo que haya en la página
   if (!rows.length) {
-    const items = parseItems(html, ["serie", "movies"], 30);
+    const items = await keepLatino(parseItems(html, ["serie", "movies"], 30), pre);
     if (items.length) rows.push({
       id: "destacadas",
       title: t("Destacados de Dorama Express", "Dorama Express picks"),
@@ -232,9 +310,10 @@ export async function browse(arg, cursor) {
   if (!(page >= 1)) throw kino.error("not_found", "cursor " + cursor);
   const path = "/" + ref + "/" + (page > 1 ? "page/" + page + "/" : "");
   const html = await fetchPage(path, 12000);
-  const items = parseItems(html, ["serie", "movies"], 60);
+  const raw = parseItems(html, ["serie", "movies"], 60);
+  const items = await keepLatino(raw);
   const out = { items: items };
-  if (items.length >= 20) out.next = String(page + 1);
+  if (raw.length >= 20) out.next = String(page + 1);
   return out;
 }
 
@@ -507,8 +586,13 @@ export async function resolve(arg) {
   // filtro por idioma preferido
   const pref = wantedLang();
   if (pref === "latino") {
-    const soloLatino = servers.filter(function (s) { return s.lang === "Latino"; });
-    if (soloLatino.length) servers = soloLatino;
+    // solo español latino: si no hay, no se cae a subtitulado
+    servers = servers.filter(function (s) { return s.lang === "Latino"; });
+    if (!servers.length) {
+      throw kino.error("unavailable", "sin servidores latino", {
+        userMessage: t("Este título no tiene audio en español latino por ahora.", "This title has no Latin Spanish audio right now."),
+      });
+    }
   } else if (pref === "sub") {
     const soloSub = servers.filter(function (s) { return s.lang === "Subtitulado"; });
     if (soloSub.length) servers = soloSub;
