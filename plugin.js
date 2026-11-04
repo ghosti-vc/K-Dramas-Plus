@@ -1,9 +1,12 @@
 // K Dramas Plus — Dorama Express para Kino
 // apiVersion 9 · busca, Inicio, episodios, servidores por idioma, descargas
+// v0.1.2: camino rápido (enlace .m3u8 directo, servidores en paralelo) antes del navegador oculto,
+//         y recuerda el último servidor que funcionó.
 // v0.1.1: lectura de páginas con respaldo por el navegador oculto (kino.browser.page)
 //         cuando el sitio responde 503 o la pantalla "Just a moment…" de Cloudflare.
 
 const BASE = "https://doramaexpress.com";
+const UA = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
 
 // ---------- textos según el idioma de Kino ----------
 function t(es, en) {
@@ -26,7 +29,7 @@ function decode(s) {
 
 function requestHeaders() {
   return {
-    "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+    "User-Agent": UA,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": t("es-MX,es;q=0.9,en;q=0.8", "en-US,en;q=0.9"),
     "Referer": BASE + "/",
@@ -374,8 +377,8 @@ function parseServers(html) {
   return servers;
 }
 
-async function captureServer(url) {
-  const page = await kino.browser.capture(url, { timeoutMs: 18000 });
+async function captureServer(url, timeoutMs) {
+  const page = await kino.browser.capture(url, { timeoutMs: timeoutMs || 12000 });
   const first = page.media && page.media[0];
   if (!first || !first.url) throw kino.error("unavailable", "captura vacía");
   const out = { url: first.url };
@@ -386,6 +389,90 @@ async function captureServer(url) {
     out.subtitles = subs.slice(0, 5).map(function (s) { return { lang: "es", url: s.url }; });
   }
   return out;
+}
+
+// ---------- camino rápido: sacar el .m3u8 del embed sin abrir el navegador ----------
+function cleanText(s) {
+  return String(s)
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/\\u0026/g, "&")
+    .replace(/\\u002F/gi, "/")
+    .replace(/\\\//g, "/");
+}
+
+// desempaqueta el "eval(function(p,a,c,k,e,d)…" que usan muchos reproductores
+function unpackAll(src) {
+  let out = "";
+  const re = /eval\(function\(p,a,c,k,e,[dr]\)\{[\s\S]*?\}\('((?:[^'\\]|\\.)*)',\s*(\d+),\s*(\d+),\s*'((?:[^'\\]|\\.)*)'\.split\('\|'\)/g;
+  let m;
+  let n = 0;
+  while ((m = re.exec(src)) !== null && n < 3) {
+    n++;
+    try {
+      const a = parseInt(m[2], 10);
+      let c = parseInt(m[3], 10);
+      const k = m[4].split("|");
+      const p = m[1].replace(/\\'/g, "'").replace(/\\\\/g, "\\");
+      const base = function (num) {
+        const hi = num < a ? "" : base(parseInt(num / a, 10));
+        const lo = num % a;
+        return hi + (lo > 35 ? String.fromCharCode(lo + 29) : lo.toString(36));
+      };
+      const d = {};
+      while (c--) d[base(c)] = k[c] || base(c);
+      out += "\n" + p.replace(/\b\w+\b/g, function (w) { return d[w] || w; });
+    } catch (e) {}
+  }
+  return out;
+}
+
+function findHls(text) {
+  const raw = String(text);
+  const all = cleanText(raw + "\n" + unpackAll(raw));
+  const m = /https?:\/\/[^"'\s<>\\{}]+?\.m3u8(?:\?[^"'\s<>\\{}]*)?/.exec(all);
+  return m ? m[0] : null;
+}
+
+// devuelve { url, headers } si el embed deja ver el .m3u8 y este responde bien; si no, null
+async function fastExtract(embedUrl) {
+  const r = await kino.fetch(embedUrl, { headers: requestHeaders() });
+  if (!r || !r.ok) return null;
+  const hls = findHls(r.text);
+  if (!hls) return null;
+  const headers = { "User-Agent": UA, "Referer": embedUrl };
+  const om = /^(https?:\/\/[^\/]+)/.exec(embedUrl);
+  if (om) headers["Origin"] = om[1];
+  const chk = await kino.fetch(hls, { headers: headers });
+  if (!chk || !chk.ok || !/^\s*#EXTM3U/.test(String(chk.text))) return null;
+  return { url: hls, headers: headers };
+}
+
+// prueba varios servidores a la vez (máximo ~5 s en total)
+async function fastScan(list) {
+  const results = [];
+  const jobs = list.map(function (s, i) {
+    results[i] = null;
+    return fastExtract(s.url).then(function (r) { results[i] = r; }).catch(function () {});
+  });
+  await Promise.race([Promise.all(jobs), kino.sleep(5000)]);
+  return results;
+}
+
+// ---------- recordar el último servidor que funcionó ----------
+async function recalledServer() {
+  try {
+    const v = await kino.storage.get("lastServer");
+    if (typeof v === "string") return v;
+    if (v && typeof v.value === "string") return v.value;
+  } catch (e) {}
+  return "";
+}
+
+async function rememberServer(name) {
+  try {
+    await kino.storage.set("lastServer", String(name), { ttlMs: 2592000000 });
+  } catch (e) {}
 }
 
 // idioma preferido de la persona ("latino", "sub" o "todos")
@@ -409,7 +496,6 @@ export async function resolve(arg) {
   if (!/^(episodio|movies)\/[a-z0-9-]+$/.test(pageRef)) {
     throw kino.error("not_found", "ref " + ref);
   }
-  // resolve tiene 75 s con el navegador aprobado; se dejan ~12 s para leer la página
   const html = await fetchPage("/" + pageRef + "/", 12000);
   let servers = parseServers(html).filter(function (s) { return s.free; });
   if (!servers.length) {
@@ -428,31 +514,61 @@ export async function resolve(arg) {
     if (soloSub.length) servers = soloSub;
   }
 
+  function labelOf(i) { return servers[i].lang + " · " + servers[i].name; }
+
+  function withAlts(stream, current) {
+    const alts = [];
+    for (let j = 0; j < servers.length && alts.length < 8; j++) {
+      if (j === current) continue;
+      alts.push({ label: labelOf(j), ref: pageRef + "|" + j });
+    }
+    if (alts.length) stream.alternatives = alts;
+    return stream;
+  }
+
   // copia perezosa: la persona eligió un servidor concreto
   if (pickIdx >= 0) {
     const pick = servers[pickIdx];
     if (!pick) throw kino.error("not_found", "servidor " + pickIdx);
-    const stream = await captureServer(pick.url);
-    stream.label = pick.lang + " · " + pick.name;
+    let stream = null;
+    try { stream = await fastExtract(pick.url); } catch (e) { stream = null; }
+    if (!stream) stream = await captureServer(pick.url, 18000);
+    stream.label = labelOf(pickIdx);
+    await rememberServer(pick.name);
     return stream;
   }
 
-  // primera pasada: prueba hasta 3 servidores
-  const tries = Math.min(3, servers.length);
-  for (let i = 0; i < tries; i++) {
+  // orden de prueba: primero el último servidor que funcionó (los índices de las copias no cambian)
+  const last = await recalledServer();
+  const order = [];
+  servers.forEach(function (s, i) { if (last && s.name === last) order.push(i); });
+  servers.forEach(function (s, i) { if (order.indexOf(i) < 0) order.push(i); });
+
+  // 1) camino rápido: hasta 6 servidores a la vez, sin navegador oculto
+  const scanIdx = order.slice(0, 6);
+  const fast = await fastScan(scanIdx.map(function (i) { return servers[i]; }));
+  for (let q = 0; q < scanIdx.length; q++) {
+    if (fast[q]) {
+      const i = scanIdx[q];
+      const stream = fast[q];
+      stream.label = labelOf(i);
+      await rememberServer(servers[i].name);
+      return withAlts(stream, i);
+    }
+  }
+
+  // 2) respaldo: navegador oculto, hasta 3 servidores, 12 s cada uno
+  const tries = Math.min(3, order.length);
+  for (let q = 0; q < tries; q++) {
+    const i = order[q];
     try {
-      const stream = await captureServer(servers[i].url);
-      stream.label = servers[i].lang + " · " + servers[i].name;
-      const alts = [];
-      for (let j = 0; j < servers.length && alts.length < 8; j++) {
-        if (j === i) continue;
-        alts.push({ label: servers[j].lang + " · " + servers[j].name, ref: pageRef + "|" + j });
-      }
-      if (alts.length) stream.alternatives = alts;
-      return stream;
+      const stream = await captureServer(servers[i].url, 12000);
+      stream.label = labelOf(i);
+      await rememberServer(servers[i].name);
+      return withAlts(stream, i);
     } catch (e) {
       const code = e && e.code;
-      if ((code === "blocked" || code === "timeout" || code === "browser_unavailable" || code === "busy") && i < tries - 1) continue;
+      if ((code === "blocked" || code === "timeout" || code === "browser_unavailable" || code === "busy") && q < tries - 1) continue;
       throw e;
     }
   }
