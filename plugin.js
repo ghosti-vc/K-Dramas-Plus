@@ -1,9 +1,14 @@
-
-
 // K Dramas Plus — Dorama Express para Kino
 // apiVersion 9 · busca, Inicio, episodios, servidores por idioma, descargas
 
 const BASE = "https://doramaexpress.com";
+
+const HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+  "Referer": BASE + "/",
+};
 
 // ---------- textos según el idioma de Kino ----------
 function t(es, en) {
@@ -24,11 +29,53 @@ function decode(s) {
     .trim();
 }
 
+function sleep(ms) {
+  return new Promise(function (res) { setTimeout(res, ms); });
+}
+
+// Respaldo: si kino.browser ofrece una forma de obtener el HTML, se usa.
+// (Se prueba con varios nombres posibles; si no existe ninguno, devuelve null.)
+async function browserHtml(url) {
+  try {
+    if (typeof kino.browser !== "object" || !kino.browser) return null;
+    const fn = kino.browser.html || kino.browser.getHtml || kino.browser.fetch || kino.browser.load;
+    if (typeof fn !== "function") return null;
+    const res = await fn.call(kino.browser, url, { timeoutMs: 20000 });
+    if (typeof res === "string") return res;
+    if (res && typeof res.html === "string") return res.html;
+    if (res && typeof res.text === "string") return res.text;
+  } catch (e) {}
+  return null;
+}
+
 async function fetchPage(path) {
-  const r = await kino.fetch(BASE + path);
-  if (r.status === 404) throw kino.error("not_found", "page " + path);
-  if (!r.ok) throw kino.error("unavailable", "http " + r.status);
-  return r.text;
+  const url = BASE + path;
+  let lastStatus = 0;
+
+  // hasta 3 intentos si el sitio responde 503/429/403
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let r;
+    try {
+      r = await kino.fetch(url, { headers: HEADERS });
+    } catch (e) {
+      if (attempt < 2) { await sleep(800 * (attempt + 1)); continue; }
+      throw e;
+    }
+    if (r.status === 404) throw kino.error("not_found", "page " + path);
+    if (r.ok) return r.text;
+    lastStatus = r.status;
+    if (r.status === 503 || r.status === 429 || r.status === 403) {
+      await sleep(1000 * (attempt + 1));
+      continue;
+    }
+    break;
+  }
+
+  // último recurso: navegador integrado (si está disponible)
+  const viaBrowser = await browserHtml(url);
+  if (viaBrowser && viaBrowser.length > 500) return viaBrowser;
+
+  throw kino.error("unavailable", "http " + lastStatus);
 }
 
 function refOf(arg) {
@@ -100,7 +147,11 @@ async function fetchHomeHtml() {
     return await fetchPage("/");
   } catch (e) {
     // la portada a veces vive en /home/ o falla un momento
-    return await fetchPage("/home/");
+    try {
+      return await fetchPage("/home/");
+    } catch (e2) {
+      throw e; // muestra el error original, no el del respaldo
+    }
   }
 }
 
