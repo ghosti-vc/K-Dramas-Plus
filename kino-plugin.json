@@ -1,7 +1,7 @@
 {
   "id": "k-dramas-plus",
   "name": "K Dramas Plus",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "apiVersion": 9,
   "entry": "plugin.js",
   "icon": "icon.png",
@@ -19,7 +19,14 @@
   "fetchHosts": "any",
   "streamHosts": "any",
   "browser": "pages",
-  "capabilities": ["search", "home", "episodes", "browse", "resolve", "download"],
+  "capabilities": [
+    "search",
+    "home",
+    "episodes",
+    "browse",
+    "resolve",
+    "download"
+  ],
   "settings": [
     {
       "key": "lang",
@@ -30,10 +37,31 @@
       "hintEn": "Which servers are used for playback",
       "default": "latino",
       "options": [
-        { "value": "latino", "label": "Latino", "labelEn": "Latin Spanish dub" },
-        { "value": "sub", "label": "Subtitulado", "labelEn": "Subtitled" },
-        { "value": "todos", "label": "Todos", "labelEn": "Both" }
+        {
+          "value": "latino",
+          "label": "Latino",
+          "labelEn": "Latin Spanish dub"
+        },
+        {
+          "value": "sub",
+          "label": "Subtitulado",
+          "labelEn": "Subtitled"
+        },
+        {
+          "value": "todos",
+          "label": "Todos",
+          "labelEn": "Both"
+        }
       ]
+    },
+    {
+      "key": "onlyLatinoTitles",
+      "label": "Solo títulos en español latino",
+      "labelEn": "Only Latin Spanish titles",
+      "type": "toggle",
+      "hint": "Oculta los títulos que no están en la colección K-Dramas Latino",
+      "hintEn": "Hides titles that are not in the K-Dramas Latino collection",
+      "default": true
     }
   ],
   "description": "Doramas y películas en español latino y subtitulado, de Dorama Express: K-dramas, C-dramas y más, con varios servidores por capítulo."
