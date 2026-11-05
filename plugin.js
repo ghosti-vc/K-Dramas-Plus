@@ -395,6 +395,74 @@ function playableFromIframe(src) {
   return null;
 }
 
+// ---- OK.ru (reproductor embebido que usan algunos capítulos de Doramed Play) ------------------
+
+const OK_EMBED = /(?:https?:)?\/\/(?:www\.|m\.)?ok\.ru\/videoembed\/(\d+)/i;
+const OK_ORDER = ["mobile", "lowest", "low", "sd", "hd", "full", "quad", "ultra"];
+const OK_LABEL = { mobile: "144p", lowest: "240p", low: "360p", sd: "480p", hd: "720p", full: "1080p", quad: "1440p", ultra: "2160p" };
+const OK_HEADERS = { Referer: "https://ok.ru/" };
+
+// Abre la página del reproductor, lee el JSON que trae (data-options -> flashvars.metadata)
+// y arma el Stream: la mejor calidad MP4 hasta 1080p, las demás como alternativas y el HLS si lo hay.
+async function okResolve(id) {
+  const html = await getHtml("https://ok.ru/videoembed/" + id);
+  const attr = /data-options="([^"]*)"/.exec(html) || /data-options='([^']*)'/.exec(html);
+  if (!attr) {
+    log("okru: sin data-options id=" + id + " bytes=" + html.length);
+    throw okUnavailable();
+  }
+  let md = null;
+  try {
+    const opts = JSON.parse(decodeEntities(attr[1]));
+    md = opts && opts.flashvars ? opts.flashvars.metadata : null;
+    if (typeof md === "string") md = JSON.parse(md);
+  } catch (e) {
+    log("okru: no se pudo leer el JSON id=" + id);
+    md = null;
+  }
+  if (!md || typeof md !== "object") {
+    log("okru: sin metadata id=" + id);
+    throw okUnavailable();
+  }
+  const vids = (Array.isArray(md.videos) ? md.videos : [])
+    .filter((v) => v && typeof v.url === "string" && /^https:\/\//.test(v.url) && OK_ORDER.indexOf(v.name) >= 0)
+    .sort((a, b) => OK_ORDER.indexOf(b.name) - OK_ORDER.indexOf(a.name)); // la mejor primero
+  const hlsRaw = md.hlsManifestUrl || md.ondemandHls || md.hlsMasterPlaylistUrl;
+  const hls = typeof hlsRaw === "string" && /^https:\/\//.test(hlsRaw) ? hlsRaw : null;
+  log("okru: id=" + id + " mp4=" + vids.map((v) => v.name).join(",") + " hls=" + (hls ? "si" : "no"));
+
+  const limit = OK_ORDER.indexOf("full");
+  const primary = vids.find((v) => OK_ORDER.indexOf(v.name) <= limit) || vids[0];
+  if (!primary && !hls) throw okUnavailable();
+
+  // Copias: primero las calidades menores a la elegida (de mayor a menor), luego el HLS y al final las mayores.
+  const copy = (v) => ({ url: v.url, mime: "video/mp4", headers: OK_HEADERS, label: "OK · " + OK_LABEL[v.name] });
+  const pi = primary ? OK_ORDER.indexOf(primary.name) : -1;
+  const copies = [];
+  if (primary) {
+    for (const v of vids) if (OK_ORDER.indexOf(v.name) < pi) copies.push(copy(v));
+    if (hls) copies.push({ url: hls, mime: "application/x-mpegurl", headers: OK_HEADERS, label: "OK · HLS" });
+    for (const v of vids.slice().reverse()) if (OK_ORDER.indexOf(v.name) > pi) copies.push(copy(v));
+  }
+
+  const out = primary
+    ? { url: primary.url, mime: "video/mp4", label: "OK · " + OK_LABEL[primary.name] }
+    : { url: hls, mime: "application/x-mpegurl", label: "OK · HLS" };
+  out.headers = OK_HEADERS;
+  out.expiresInSeconds = 1800;
+  if (copies.length) out.alternatives = copies.slice(0, 8);
+  return out;
+}
+
+function okUnavailable() {
+  return kino.error("unavailable", "okru sin video", {
+    userMessage: tr(
+      "Este capítulo ya no está disponible en el reproductor del sitio. Prueba otra opción o busca el título de nuevo.",
+      "This episode is no longer available on the site's player. Try another option or search the title again."
+    ),
+  });
+}
+
 export async function resolve(ref) {
   await null; // las validaciones de abajo pueden lanzar: nunca antes del primer await
   const raw = String(ref || "");
@@ -404,6 +472,13 @@ export async function resolve(ref) {
     const u = raw.slice(6);
     if (!/^https:\/\//.test(u)) throw kino.error("not_found", "alternativa inválida");
     return { url: u, mime: /\.m3u8(\?|$)/i.test(u) ? "application/x-mpegurl" : "video/mp4" };
+  }
+
+  // Copia perezosa de OK.ru elegida por la persona (o por el cambio automático).
+  if (raw.startsWith("okru|")) {
+    const id = raw.slice(5);
+    if (!/^\d{1,20}$/.test(id)) throw kino.error("not_found", "id de okru inválido");
+    return okResolve(id);
   }
 
   // Dorama Express: su video está detrás de candados del sitio (espera, VIP, ruleta).
@@ -421,12 +496,30 @@ export async function resolve(ref) {
   const html = await getHtml(raw.slice(3));
 
   const playable = [];
+  const okIds = [];
   const re = /<iframe[^>]*src=(['"])([^'"]+)\1[^>]*>/g;
   let m;
   while ((m = re.exec(html))) {
-    const p = playableFromIframe(decodeEntities(m[2]));
+    const src = decodeEntities(m[2]);
+    const ok = OK_EMBED.exec(src);
+    if (ok) {
+      if (okIds.indexOf(ok[1]) < 0) okIds.push(ok[1]);
+      continue;
+    }
+    const p = playableFromIframe(src);
     if (p && !playable.some((x) => x.url === p.url)) playable.push(p);
   }
+  log("resolve: directos=" + playable.length + " okru=" + okIds.length);
+
+  // Sin video directo pero con OK.ru: se resuelve el primero y los demás quedan como copias perezosas.
+  if (!playable.length && okIds.length) {
+    const first = await okResolve(okIds[0]);
+    const lazy = okIds.slice(1, 4).map((id, i) => ({ label: tr("Opción ", "Option ") + (i + 2), ref: "okru|" + id }));
+    const alts = (first.alternatives || []).concat(lazy).slice(0, 8);
+    if (alts.length) first.alternatives = alts;
+    return first;
+  }
+
   if (!playable.length) {
     throw kino.error("unavailable", "sin video directo", {
       userMessage: tr(
@@ -436,11 +529,12 @@ export async function resolve(ref) {
     });
   }
   const out = { url: playable[0].url, mime: playable[0].mime };
-  if (playable.length > 1) {
-    out.alternatives = playable.slice(1, 6).map((p, i) => ({
-      label: tr("Opción ", "Option ") + (i + 2),
-      ref: "dmurl|" + p.url,
-    }));
-  }
+  const alts = playable.slice(1, 6).map((p, i) => ({
+    label: tr("Opción ", "Option ") + (i + 2),
+    ref: "dmurl|" + p.url,
+  }));
+  // Si además hay OK.ru, queda como copia perezosa: solo se abre si hace falta.
+  for (const id of okIds.slice(0, 2)) alts.push({ label: "OK", ref: "okru|" + id });
+  if (alts.length) out.alternatives = alts.slice(0, 8);
   return out;
 }
