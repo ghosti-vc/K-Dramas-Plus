@@ -1,7 +1,7 @@
 {
   "id": "k-dramas-plus",
   "name": "K-Dramas Plus",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "apiVersion": 6,
   "entry": "plugin.js",
   "icon": "",
