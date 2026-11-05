@@ -1,6 +1,6 @@
-// Plugin de Kino: Doramas en audio latino (búsqueda unificada).
+// Plugin de Kino: Doramas en audio latino (búsqueda unificada + Inicio).
 // Fuentes:
-//  - "dm|" Doramed Play (www.doramedplay.com): búsqueda, episodios y reproducción (MP4 directo).
+//  - "dm|" Doramed Play (www.doramedplay.com): inicio, búsqueda, episodios y reproducción (MP4 directo).
 //  - "dx|" Dorama Express (doramaexpress.com): búsqueda y episodios; su video está detrás de
 //    candados del sitio (temporizador, VIP) que el plugin no salta: al reproducir avisa.
 // Pendiente: "pn|" Pandrama (bloquea el acceso automatizado).
@@ -48,6 +48,63 @@ async function getHtml(url) {
   return r.text();
 }
 
+// ---- Inicio -----------------------------------------------------------------------------------
+
+// Quita el sufijo de tamaño (-185x278) para pedir la imagen original.
+function bigPoster(src) {
+  return src ? src.replace(/-\d+x\d+\.(jpg|jpeg|png|webp)$/i, ".$1") : undefined;
+}
+
+// Lee una página de listado de Doramed Play (tema Dooplay): /tvshows/ o /movies/.
+async function dmListing(path) {
+  const html = await getHtml(DM + path);
+  const items = [];
+  const seen = new Set();
+  const blocks = html.split("<article").slice(1);
+  for (const b of blocks) {
+    const a = /<a href="(https:\/\/www\.doramedplay\.com\/(tvshows|movies)\/[^"]+)"/.exec(b);
+    if (!a || seen.has(a[1])) continue;
+    const img = /<img[^>]*src="([^"]+)"[^>]*alt="([^"]*)"/.exec(b);
+    const imgAlt = img ? null : /<img[^>]*alt="([^"]*)"[^>]*src="([^"]+)"/.exec(b);
+    const src = img ? img[1] : (imgAlt ? imgAlt[2] : undefined);
+    const alt = img ? img[2] : (imgAlt ? imgAlt[1] : "");
+    const h3 = /<h3[^>]*>([\s\S]*?)<\/h3>/.exec(b);
+    const title = stripTags(h3 ? h3[1] : alt);
+    if (!title) continue;
+    seen.add(a[1]);
+    const clean = a[1].replace(/^https:\/\/www\.doramedplay\.com\//, "/");
+    items.push({
+      id: "dm-" + clean.replace(/[^a-z0-9-]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 80),
+      ref: "dm|" + a[1],
+      title: title.slice(0, 200),
+      kind: a[2] === "movies" ? "movie" : "series",
+      poster: bigPoster(src),
+    });
+  }
+  return items.slice(0, 40);
+}
+
+export async function home() {
+  await null; // por si algo de abajo lanza: nunca antes del primer await
+  const [series, movies] = await Promise.allSettled([
+    dmListing("/tvshows/"),
+    dmListing("/movies/"),
+  ]);
+  const rows = [];
+  if (series.status === "fulfilled" && series.value.length) {
+    rows.push({ title: tr("Doramas", "Dramas"), genre: "series", items: series.value });
+  } else if (series.status === "rejected") {
+    log("home: doramas falló");
+  }
+  if (movies.status === "fulfilled" && movies.value.length) {
+    rows.push({ title: tr("Películas", "Movies"), genre: "peliculas", items: movies.value });
+  } else if (movies.status === "rejected") {
+    log("home: películas falló");
+  }
+  if (!rows.length) throw kino.error("unavailable", "inicio sin resultados");
+  return rows;
+}
+
 // ---- Búsqueda unificada -----------------------------------------------------------------------
 
 export async function search(query) {
@@ -86,8 +143,7 @@ async function dmSearch(enc) {
     const kind = m[1].indexOf("/movies/") !== -1 ? "movie" : "series";
     const year = /<span class="year">(\d{4})</.exec(b);
     const imgMatch = /<img src="([^"]+)"/.exec(b);
-    // Quita el sufijo de tamaño (-185x278) para pedir la imagen original.
-    const poster = imgMatch ? imgMatch[1].replace(/-\d+x\d+\.(jpg|jpeg|png|webp)$/i, ".$1") : undefined;
+    const poster = imgMatch ? bigPoster(imgMatch[1]) : undefined;
     const desc = /<div class="contenido"><p>([\s\S]*?)<\/p><\/div>/.exec(b);
     const clean = m[1].replace(/^https:\/\/www\.doramedplay\.com\//, "/");
     items.push({
