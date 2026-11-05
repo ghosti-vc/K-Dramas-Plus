@@ -13,6 +13,11 @@ function log(...args) {
   try { kino.log(...args); } catch { /* el registro no debe romper nada */ }
 }
 
+// Textos que lee la persona: español por defecto, inglés si kino.lang es "en-US".
+function tr(es, en) {
+  return (typeof kino !== "undefined" && kino.lang === "en-US") ? en : es;
+}
+
 function decodeEntities(s) {
   return String(s || "")
     .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
@@ -35,14 +40,20 @@ function squash(text) {
 // Nunca lanza antes del primer await (los Kino viejos abortan la llamada si lo hace).
 async function getHtml(url) {
   const r = await kino.fetch(url);
-  if (!r.ok) throw kino.error("unavailable", "el sitio respondió " + r.status);
+  if (!r.ok) {
+    if (r.status === 404) throw kino.error("not_found", "el sitio respondió 404");
+    if (r.status === 429) throw kino.error("rate_limited", "el sitio respondió 429");
+    throw kino.error("unavailable", "el sitio respondió " + r.status);
+  }
   return r.text();
 }
 
 // ---- Búsqueda unificada -----------------------------------------------------------------------
 
 export async function search(query) {
+  await null; // por si algo de abajo lanza: nunca antes del primer await
   const q = stripTags(query && query.q).slice(0, 100);
+  if (!q) return [];
   const enc = encodeURIComponent(q);
   const [dm, dx] = await Promise.allSettled([
     dmSearch(enc),
@@ -56,6 +67,7 @@ export async function search(query) {
     seen.add(key);
     out.push(item);
   };
+  // Doramed Play primero: si el título está en las dos, queda el que sí se reproduce.
   if (dm.status === "fulfilled") dm.value.forEach(add);
   if (dx.status === "fulfilled") dx.value.forEach(add);
   if (!out.length && dm.status === "rejected" && dx.status === "rejected") throw dm.reason;
@@ -73,8 +85,9 @@ async function dmSearch(enc) {
     if (!m || !/^https:\/\/www\.doramedplay\.com\/(tvshows|movies)\//.test(m[1])) continue;
     const kind = m[1].indexOf("/movies/") !== -1 ? "movie" : "series";
     const year = /<span class="year">(\d{4})</.exec(b);
-    let img = /<img src="([^"]+)"/.exec(b);
-    if (img) img = img[1].replace(/-\d+x\d+\.(jpg|jpeg|png|webp)$/i, ".$1");
+    const imgMatch = /<img src="([^"]+)"/.exec(b);
+    // Quita el sufijo de tamaño (-185x278) para pedir la imagen original.
+    const poster = imgMatch ? imgMatch[1].replace(/-\d+x\d+\.(jpg|jpeg|png|webp)$/i, ".$1") : undefined;
     const desc = /<div class="contenido"><p>([\s\S]*?)<\/p><\/div>/.exec(b);
     const clean = m[1].replace(/^https:\/\/www\.doramedplay\.com\//, "/");
     items.push({
@@ -82,8 +95,8 @@ async function dmSearch(enc) {
       ref: "dm|" + m[1],
       title: stripTags(m[2]).slice(0, 200),
       kind,
-      year: year ? year[1] : undefined,
-      poster: img ? img[1] : undefined,
+      year: year ? Number(year[1]) : undefined,
+      poster,
       overview: desc ? stripTags(desc[1]).slice(0, 400) : undefined,
     });
   }
@@ -128,8 +141,10 @@ export async function episodes(ref) {
 
 function dmEpisodes(html, url) {
   const title = /<h1[^>]*>([\s\S]*?)<\/h1>/.exec(html);
-  let poster = /class=(['"])poster\1[^>]*>\s*<img[^>]*src=(['"])([^'"]+)\2/i.exec(html);
-  if (!poster) poster = /property=(['"])og:image\1[^>]*content=(['"])([^'"]+)\2/i.exec(html) || /<meta property="og:image" content="([^"]+)"/.exec(html);
+  // Grupo 3 = la URL (los grupos 1 y 2 son las comillas).
+  const p1 = /class=(['"])poster\1[^>]*>\s*<img[^>]*src=(['"])([^'"]+)\2/i.exec(html);
+  const p2 = /property=(['"])og:image\1[^>]*content=(['"])([^'"]+)\2/i.exec(html);
+  const poster = p1 ? p1[3] : (p2 ? p2[3] : undefined);
 
   // Dooplay: <div class='numerando'>1 - 2</div><div class='episodiotitle'><a href='...'>Episodio 2</a>
   const eps = [];
@@ -138,16 +153,17 @@ function dmEpisodes(html, url) {
   while ((m = re.exec(html))) {
     const num = m[2].split("-").map((x) => parseInt(x.trim(), 10));
     if (!/^https:\/\/www\.doramedplay\.com\/episodes\//.test(m[4])) continue;
+    const number = Number.isInteger(num[1]) ? num[1] : eps.length + 1;
     eps.push({
       season: Number.isInteger(num[0]) ? num[0] : 1,
-      number: Number.isInteger(num[1]) ? num[1] : eps.length + 1,
+      number,
       ref: "dm|" + m[4],
-      title: stripTags(m[5]) || ("Episodio " + (num[1] || eps.length + 1)),
+      title: stripTags(m[5]) || (tr("Episodio ", "Episode ") + number),
     });
   }
   if (!eps.length) throw kino.error("not_found", "no se encontró la lista de episodios");
   return {
-    series: { title: title ? stripTags(title[1]) : url, poster: poster ? poster[1] : undefined },
+    series: { title: title ? stripTags(title[1]) : url, poster },
     episodes: eps,
   };
 }
@@ -167,7 +183,7 @@ function dxEpisodes(html, url) {
       season: sn ? parseInt(sn[1], 10) : 1,
       number,
       ref: "dx|" + m[3],
-      title: "Episodio " + number,
+      title: tr("Episodio ", "Episode ") + number,
     });
   }
   if (!eps.length) throw kino.error("not_found", "no se encontró la lista de episodios");
@@ -188,7 +204,7 @@ function playableFromIframe(src) {
       u = new URLSearchParams(new URL(src).search).get("source") || "";
     } catch {
       const mm = /source=([^&'"]+)/.exec(src);
-      u = mm ? decodeURIComponent(mm[1]) : "";
+      try { u = mm ? decodeURIComponent(mm[1]) : ""; } catch { u = ""; }
     }
   }
   if (!/^https:\/\//.test(u)) return null;
@@ -202,13 +218,20 @@ export async function resolve(ref) {
   const raw = String(ref || "");
 
   // Alternativa elegida por la persona: ya es una URL reproducible.
-  if (raw.startsWith("dmurl|")) return { url: raw.slice(6), mime: /\.(m3u8)(\?|$)/i.test(raw) ? "application/x-mpegurl" : "video/mp4" };
+  if (raw.startsWith("dmurl|")) {
+    const u = raw.slice(6);
+    if (!/^https:\/\//.test(u)) throw kino.error("not_found", "alternativa inválida");
+    return { url: u, mime: /\.m3u8(\?|$)/i.test(u) ? "application/x-mpegurl" : "video/mp4" };
+  }
 
   // Dorama Express: su video está detrás de candados del sitio (espera, VIP, ruleta).
-  // El plugin no los salta; busca la misma serie en Doramed Play en su lugar.
+  // El plugin no los salta; la persona puede buscar la misma serie en Doramed Play.
   if (raw.startsWith("dx|")) {
     throw kino.error("unavailable", "dorama express con candado", {
-      userMessage: "Dorama Express solo reproduce en su web, con esperas y anuncios. Busca el título de nuevo: si está en Doramed Play, aquí sí se reproduce.",
+      userMessage: tr(
+        "Dorama Express solo reproduce en su web, con esperas y anuncios. Busca el título de nuevo: si está en Doramed Play, aquí sí se reproduce.",
+        "Dorama Express only plays on its own site, with waits and ads. Search the title again: if it is on Doramed Play, it plays here."
+      ),
     });
   }
 
@@ -224,12 +247,18 @@ export async function resolve(ref) {
   }
   if (!playable.length) {
     throw kino.error("unavailable", "sin video directo", {
-      userMessage: "Este capítulo solo está en reproductores que el plugin no puede abrir. Prueba otra opción del capítulo o busca el título de nuevo.",
+      userMessage: tr(
+        "Este capítulo solo está en reproductores que el plugin no puede abrir. Prueba otra opción del capítulo o busca el título de nuevo.",
+        "This episode is only on players the plugin can't open. Try another option or search the title again."
+      ),
     });
   }
   const out = { url: playable[0].url, mime: playable[0].mime };
   if (playable.length > 1) {
-    out.alternatives = playable.slice(1, 6).map((p, i) => ({ label: "Opción " + (i + 2), ref: "dmurl|" + p.url }));
+    out.alternatives = playable.slice(1, 6).map((p, i) => ({
+      label: tr("Opción ", "Option ") + (i + 2),
+      ref: "dmurl|" + p.url,
+    }));
   }
   return out;
 }
