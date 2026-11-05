@@ -92,7 +92,7 @@ export async function home() {
   ]);
   const rows = [];
   if (series.status === "fulfilled" && series.value.length) {
-    rows.push({ title: tr("Doramas", "Dramas"), genre: "series", items: series.value });
+    rows.push({ title: tr("Doramas", "Dramas"), genre: "doramas", items: series.value });
   } else if (series.status === "rejected") {
     log("home: doramas falló");
   }
