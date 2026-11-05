@@ -1,68 +1,15 @@
 {
-  "id": "k-dramas-plus",
+  "id": "k-drama-plus",
   "name": "K Dramas Plus",
-  "version": "0.1.4",
-  "apiVersion": 9,
+  "version": "0.2.0",
+  "apiVersion": 6,
   "entry": "plugin.js",
   "icon": "icon.png",
-  "hosts": [
-    "doramaexpress.com",
-    "image.tmdb.org",
-    "morencius.com",
-    "bysevepoin.com",
-    "vixeo.io",
-    "ok.ru",
-    "player.abyssplayer.com",
-    "dsvplay.com",
-    "luluvido.com"
-  ],
-  "fetchHosts": "any",
+  "description": "Doramas en audio latino. Búsqueda unificada en Doramed Play (reproduce sus capítulos en MP4) y Dorama Express (catálogo y episodios).",
+  "author": "ghosti-vc",
+  "homepage": "https://github.com/ghosti-vc/k-drama-plus",
+  "hosts": ["www.doramedplay.com", "doramedplay.com", "doramaexpress.com", "www.doramaexpress.com"],
   "streamHosts": "any",
-  "browser": "pages",
-  "capabilities": [
-    "search",
-    "home",
-    "episodes",
-    "browse",
-    "resolve",
-    "download"
-  ],
-  "settings": [
-    {
-      "key": "lang",
-      "label": "Idioma preferido",
-      "labelEn": "Preferred language",
-      "type": "select",
-      "hint": "Qué servidores se usan al reproducir",
-      "hintEn": "Which servers are used for playback",
-      "default": "latino",
-      "options": [
-        {
-          "value": "latino",
-          "label": "Latino",
-          "labelEn": "Latin Spanish dub"
-        },
-        {
-          "value": "sub",
-          "label": "Subtitulado",
-          "labelEn": "Subtitled"
-        },
-        {
-          "value": "todos",
-          "label": "Todos",
-          "labelEn": "Both"
-        }
-      ]
-    },
-    {
-      "key": "onlyLatinoTitles",
-      "label": "Solo títulos en español latino",
-      "labelEn": "Only Latin Spanish titles",
-      "type": "toggle",
-      "hint": "Oculta los títulos que no están en la colección K-Dramas Latino",
-      "hintEn": "Hides titles that are not in the K-Dramas Latino collection",
-      "default": true
-    }
-  ],
-  "description": "Doramas y películas en español latino y subtitulado, de Dorama Express: K-dramas, C-dramas y más, con varios servidores por capítulo."
+  "capabilities": ["search", "episodes", "resolve", "download"],
+  "color": "#06d154"
 }
