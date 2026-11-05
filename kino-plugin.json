@@ -1,15 +1,15 @@
 {
   "id": "k-dramas-plus",
   "name": "K-Dramas Plus",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "apiVersion": 6,
   "entry": "plugin.js",
-  "icon": "",
+  "icon": "icon.png",
   "description": "Doramas en audio latino. Búsqueda unificada en Doramed Play (reproduce sus capítulos en MP4) y Dorama Express (catálogo y episodios).",
   "author": "ghosti-vc",
   "homepage": "https://github.com/ghosti-vc/K-Dramas-Plus",
   "hosts": ["www.doramedplay.com", "doramedplay.com", "doramaexpress.com", "www.doramaexpress.com"],
   "streamHosts": "any",
-  "capabilities": ["search", "episodes", "resolve", "download"],
+  "capabilities": ["home", "search", "episodes", "resolve", "download"],
   "color": "#06d154"
 }
