@@ -55,50 +55,64 @@ function bigPoster(src) {
   return src ? src.replace(/-\d+x\d+\.(jpg|jpeg|png|webp)$/i, ".$1") : undefined;
 }
 
-// Lee una página de listado de Doramed Play (tema Dooplay): /tvshows/ o /movies/.
-async function dmListing(path) {
-  const html = await getHtml(DM + path);
+// Lee las tarjetas <article class="item ..."> de un trozo de HTML de Doramed Play (tema Dooplay).
+function dmCards(chunk) {
   const items = [];
   const seen = new Set();
-  const blocks = html.split("<article").slice(1);
-  for (const b of blocks) {
+  for (const b of String(chunk || "").split("<article").slice(1)) {
     const a = /<a href="(https:\/\/www\.doramedplay\.com\/(tvshows|movies)\/[^"]+)"/.exec(b);
     if (!a || seen.has(a[1])) continue;
     const img = /<img[^>]*src="([^"]+)"[^>]*alt="([^"]*)"/.exec(b);
-    const imgAlt = img ? null : /<img[^>]*alt="([^"]*)"[^>]*src="([^"]+)"/.exec(b);
-    const src = img ? img[1] : (imgAlt ? imgAlt[2] : undefined);
-    const alt = img ? img[2] : (imgAlt ? imgAlt[1] : "");
     const h3 = /<h3[^>]*>([\s\S]*?)<\/h3>/.exec(b);
-    const title = stripTags(h3 ? h3[1] : alt);
+    const title = stripTags(h3 ? h3[1] : (img ? img[2] : ""));
     if (!title) continue;
     seen.add(a[1]);
+    const yearMatch = /<span>[^<]*?(\d{4})[^<]*<\/span>/.exec(b);
     const clean = a[1].replace(/^https:\/\/www\.doramedplay\.com\//, "/");
     items.push({
       id: "dm-" + clean.replace(/[^a-z0-9-]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 80),
       ref: "dm|" + a[1],
       title: title.slice(0, 200),
       kind: a[2] === "movies" ? "movie" : "series",
-      poster: bigPoster(src),
+      year: yearMatch ? Number(yearMatch[1]) : undefined,
+      poster: img ? bigPoster(img[1]) : undefined,
     });
   }
-  return items.slice(0, 40);
+  return items;
+}
+
+// Separa la página en "Destacadas" (carrusel) y "Añadido recientemente" (lista principal).
+async function dmHomePage(path) {
+  const html = await getHtml(DM + path);
+  const iArchive = html.indexOf('id="archive-content"');
+  const iFeatured = html.indexOf('id="featured-titles"');
+  const recent = iArchive >= 0 ? html.slice(iArchive) : html;
+  const featured = (iFeatured >= 0 && iArchive > iFeatured) ? html.slice(iFeatured, iArchive) : "";
+  return { featured: dmCards(featured).slice(0, 20), recent: dmCards(recent).slice(0, 40) };
 }
 
 export async function home() {
   await null; // por si algo de abajo lanza: nunca antes del primer await
   const [series, movies] = await Promise.allSettled([
-    dmListing("/tvshows/"),
-    dmListing("/movies/"),
+    dmHomePage("/tvshows/"),
+    dmHomePage("/movies/"),
   ]);
   const rows = [];
-  if (series.status === "fulfilled" && series.value.length) {
-    rows.push({ title: tr("Doramas", "Dramas"), genre: "doramas", items: series.value });
-  } else if (series.status === "rejected") {
+  if (series.status === "fulfilled") {
+    if (series.value.featured.length) {
+      rows.push({ title: tr("Doramas destacados", "Featured dramas"), genre: "doramas", items: series.value.featured });
+    }
+    if (series.value.recent.length) {
+      rows.push({ title: tr("Doramas recién agregados", "Recently added dramas"), genre: "doramas", items: series.value.recent });
+    }
+  } else {
     log("home: doramas falló");
   }
-  if (movies.status === "fulfilled" && movies.value.length) {
-    rows.push({ title: tr("Películas", "Movies"), genre: "peliculas", items: movies.value });
-  } else if (movies.status === "rejected") {
+  if (movies.status === "fulfilled") {
+    if (movies.value.recent.length) {
+      rows.push({ title: tr("Películas", "Movies"), genre: "peliculas", items: movies.value.recent });
+    }
+  } else {
     log("home: películas falló");
   }
   if (!rows.length) throw kino.error("unavailable", "inicio sin resultados");
