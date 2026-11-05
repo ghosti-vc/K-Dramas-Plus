@@ -72,6 +72,9 @@ function dmCards(chunk) {
     if (!title) continue;
     seen.add(a[1]);
     const yearMatch = /<span>[^<]*?(\d{4})[^<]*<\/span>/.exec(b);
+    // La nota que muestra el sitio (0 a 10); si no se encuentra o es 0, no se manda.
+    const ratingMatch = /class="rating"[^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*</.exec(b);
+    const rating = ratingMatch ? Number(ratingMatch[1]) : 0;
     const clean = a[1].replace(/^https:\/\/www\.doramedplay\.com\//, "/");
     items.push({
       id: "dm-" + clean.replace(/[^a-z0-9-]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 80),
@@ -80,9 +83,27 @@ function dmCards(chunk) {
       kind: a[2] === "movies" ? "movie" : "series",
       year: yearMatch ? Number(yearMatch[1]) : undefined,
       poster: img ? bigPoster(img[1]) : undefined,
+      rating: rating > 0 && rating <= 10 ? rating : undefined,
     });
   }
   return items;
+}
+
+// Completa "Destacados" con los títulos mejor calificados de la lista reciente
+// (sin repetir), hasta "limit". Con notas iguales o sin nota se respeta el orden del sitio.
+function fillFeatured(featured, recent, limit) {
+  const out = featured.slice();
+  const seen = new Set(out.map((x) => x.id));
+  const rest = recent
+    .filter((x) => !seen.has(x.id))
+    .map((x, i) => ({ x, i }))
+    .sort((a, b) => ((b.x.rating || 0) - (a.x.rating || 0)) || (a.i - b.i))
+    .map((o) => o.x);
+  for (const it of rest) {
+    if (out.length >= limit) break;
+    out.push(it);
+  }
+  return out.slice(0, limit);
 }
 
 // Separa la página en "Destacadas" (carrusel) y "Añadido recientemente" (lista principal).
@@ -106,11 +127,12 @@ export async function home() {
   // Cada fila NECESITA un "id" único y un "title": Kino descarta las filas que no lo traen.
   const rows = [];
   if (series.status === "fulfilled") {
-    if (series.value.featured.length) {
+    const featured = fillFeatured(series.value.featured, series.value.recent, 20);
+    if (featured.length) {
       rows.push({
         id: "dm-destacados",
         title: tr("Doramas destacados", "Featured dramas"),
-        items: series.value.featured,
+        items: featured,
       });
     }
     if (series.value.recent.length) {
