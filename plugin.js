@@ -34,7 +34,10 @@ function stripTags(s) {
 }
 
 function squash(text) {
-  return stripTags(text).toLowerCase().normalize("NFKD").replace(/[^a-z0-9]/g, "");
+  let x = stripTags(text).toLowerCase();
+  // normalize puede no existir en el motor del plugin: sin él, solo se quitan los símbolos.
+  if (typeof x.normalize === "function") x = x.normalize("NFKD");
+  return x.replace(/[^a-z0-9]/g, "");
 }
 
 // Nunca lanza antes del primer await (los Kino viejos abortan la llamada si lo hace).
@@ -100,20 +103,35 @@ export async function home() {
     dmHomePage("/tvshows/"),
     dmHomePage("/movies/"),
   ]);
+  // Cada fila NECESITA un "id" único y un "title": Kino descarta las filas que no lo traen.
   const rows = [];
   if (series.status === "fulfilled") {
     if (series.value.featured.length) {
-      rows.push({ title: tr("Doramas destacados", "Featured dramas"), items: series.value.featured });
+      rows.push({
+        id: "dm-destacados",
+        title: tr("Doramas destacados", "Featured dramas"),
+        items: series.value.featured,
+      });
     }
     if (series.value.recent.length) {
-      rows.push({ title: tr("Doramas recién agregados", "Recently added dramas"), ref: "tv", items: series.value.recent });
+      rows.push({
+        id: "dm-doramas",
+        title: tr("Doramas recién agregados", "Recently added dramas"),
+        ref: "tv",
+        items: series.value.recent,
+      });
     }
   } else {
     log("home: doramas falló");
   }
   if (movies.status === "fulfilled") {
     if (movies.value.recent.length) {
-      rows.push({ title: tr("Películas", "Movies"), ref: "movies", items: movies.value.recent });
+      rows.push({
+        id: "dm-peliculas",
+        title: tr("Películas", "Movies"),
+        ref: "movies",
+        items: movies.value.recent,
+      });
     }
   } else {
     log("home: películas falló");
@@ -142,15 +160,16 @@ export async function browse(ref, cursor) {
 }
 
 // Las fichas de la sección Categorías del plugin; cada una abre browse(ref, null).
+// Cada mosaico lleva "id" (como en el ejemplo del contrato).
 export async function categories() {
   await null;
   const [tv, mv] = await Promise.allSettled([dmHomePage("/tvshows/"), dmHomePage("/movies/")]);
   const art = (res) => (res.status === "fulfilled" && res.value.recent[0]) ? res.value.recent[0].poster : undefined;
   const tiles = [
-    { title: tr("Doramas", "Dramas"), ref: "tv", art: art(tv) },
-    { title: tr("Películas", "Movies"), ref: "movies", art: art(mv) },
+    { id: "doramas", title: tr("Doramas", "Dramas"), ref: "tv", art: art(tv) },
+    { id: "peliculas", title: tr("Películas", "Movies"), ref: "movies", art: art(mv) },
   ];
-  return tiles.map((t) => (t.art ? t : { title: t.title, ref: t.ref }));
+  return tiles.map((t) => (t.art ? t : { id: t.id, title: t.title, ref: t.ref }));
 }
 
 // ---- Búsqueda unificada -----------------------------------------------------------------------
