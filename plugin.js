@@ -40,6 +40,7 @@ function squash(text) {
 // Nunca lanza antes del primer await (los Kino viejos abortan la llamada si lo hace).
 async function getHtml(url) {
   const r = await kino.fetch(url);
+  log("fetch status=" + r.status + " ok=" + r.ok);
   if (!r.ok) {
     if (r.status === 404) throw kino.error("not_found", "el sitio respondió 404");
     if (r.status === 429) throw kino.error("rate_limited", "el sitio respondió 429");
@@ -88,7 +89,9 @@ async function dmHomePage(path) {
   const iFeatured = html.indexOf('id="featured-titles"');
   const recent = iArchive >= 0 ? html.slice(iArchive) : html;
   const featured = (iFeatured >= 0 && iArchive > iFeatured) ? html.slice(iFeatured, iArchive) : "";
-  return { featured: dmCards(featured).slice(0, 20), recent: dmCards(recent).slice(0, 40) };
+  const out = { featured: dmCards(featured).slice(0, 20), recent: dmCards(recent).slice(0, 40) };
+  log("pagina " + path + " bytes=" + html.length + " archivo=" + (iArchive >= 0) + " destacadas=" + out.featured.length + " recientes=" + out.recent.length);
+  return out;
 }
 
 export async function home() {
