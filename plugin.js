@@ -8,6 +8,9 @@
 const DM = "https://www.doramedplay.com";
 const DX = "https://doramaexpress.com";
 const MAX_RESULTS = 100;
+const HOME_ROW = 20;   // títulos por fila en Inicio
+const CAT_VIEW = 60;   // títulos que carga cada tanda de "Ver más" y de Categorías
+const CAT_MAX = 100;   // tope de Kino por página
 
 function log(...args) {
   try { kino.log(...args); } catch { /* el registro no debe romper nada */ }
@@ -127,20 +130,20 @@ export async function home() {
   // Cada fila NECESITA un "id" único y un "title": Kino descarta las filas que no lo traen.
   const rows = [];
   if (series.status === "fulfilled") {
-    const featured = fillFeatured(series.value.featured, series.value.recent, 20);
+    const featured = fillFeatured(series.value.featured, series.value.recent, HOME_ROW);
     if (featured.length) {
       rows.push({
         id: "dm-destacados",
-        title: tr("Doramas destacados", "Featured dramas"),
+        title: tr("Destacados", "Featured"),
         items: featured,
       });
     }
     if (series.value.recent.length) {
       rows.push({
         id: "dm-doramas",
-        title: tr("Doramas recién agregados", "Recently added dramas"),
+        title: tr("Recién Agregados", "Recently Added"),
         ref: "tv",
-        items: series.value.recent,
+        items: series.value.recent.slice(0, HOME_ROW),
       });
     }
   } else {
@@ -152,7 +155,7 @@ export async function home() {
         id: "dm-peliculas",
         title: tr("Películas", "Movies"),
         ref: "movies",
-        items: movies.value.recent,
+        items: movies.value.recent.slice(0, HOME_ROW),
       });
     }
   } else {
@@ -165,19 +168,53 @@ export async function home() {
 
 // ---- Catálogos (Ver más y Categorías) ---------------------------------------------------------
 
+// Una página del archivo del sitio (la lista principal de doramas o de películas).
+async function dmArchivePage(r, n) {
+  const path = (r === "tv" ? "/tvshows/" : "/movies/") + (n > 1 ? "page/" + n + "/" : "");
+  const html = await getHtml(DM + path);
+  const i = html.indexOf('id="archive-content"');
+  return {
+    items: dmCards(i >= 0 ? html.slice(i) : html),
+    hasNext: html.indexOf("/page/" + (n + 1) + "/") !== -1,
+  };
+}
+
 // ref "tv" = doramas, ref "movies" = películas; el cursor es el número de página del sitio.
+// Cada tanda junta varias páginas del sitio hasta llegar a unos 60 títulos (máximo 100).
 export async function browse(ref, cursor) {
   await null; // por si algo de abajo lanza: nunca antes del primer await
   const r = String(ref || "");
   if (r !== "tv" && r !== "movies") throw kino.error("not_found", "catálogo desconocido");
   const n = Math.max(1, parseInt(cursor, 10) || 1);
-  const path = (r === "tv" ? "/tvshows/" : "/movies/") + (n > 1 ? "page/" + n + "/" : "");
-  const html = await getHtml(DM + path);
-  const i = html.indexOf('id="archive-content"');
-  const items = dmCards(i >= 0 ? html.slice(i) : html).slice(0, 100);
-  const hasNext = html.indexOf("/page/" + (n + 1) + "/") !== -1;
-  const page = { items };
-  if (hasNext && items.length) page.next = String(n + 1);
+  const items = [];
+  const seen = new Set();
+  let p = n;
+  let last = n - 1;
+  let hasNext = true;
+  let rounds = 0;
+  while (hasNext && items.length < CAT_VIEW && rounds < 3) {
+    rounds++;
+    const batch = await Promise.allSettled([0, 1, 2].map((k) => dmArchivePage(r, p + k)));
+    let stop = false;
+    for (let k = 0; k < batch.length; k++) {
+      const res = batch[k];
+      if (res.status !== "fulfilled") {
+        if (last < n) throw res.reason; // ni la primera página cargó: es un error de verdad
+        stop = true;
+        break;
+      }
+      const fresh = res.value.items.filter((x) => !seen.has(x.id));
+      if (items.length && items.length + fresh.length > CAT_MAX) { stop = true; break; }
+      for (const x of fresh) { seen.add(x.id); items.push(x); }
+      last = p + k;
+      hasNext = res.value.hasNext;
+      if (!hasNext || items.length >= CAT_VIEW) { stop = true; break; }
+    }
+    if (stop) break;
+    p += 3;
+  }
+  const page = { items: items.slice(0, CAT_MAX) };
+  if (hasNext && items.length) page.next = String(last + 1);
   return page;
 }
 
