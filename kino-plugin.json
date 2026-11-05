@@ -4,7 +4,7 @@
   "version": "0.2.1",
   "apiVersion": 6,
   "entry": "plugin.js",
-  "icon": "icon.png",
+  "icon": "",
   "description": "Doramas en audio latino. Búsqueda unificada en Doramed Play (reproduce sus capítulos en MP4) y Dorama Express (catálogo y episodios).",
   "author": "ghosti-vc",
   "homepage": "https://github.com/ghosti-vc/K-Dramas-Plus",
