@@ -103,20 +103,50 @@ export async function home() {
       rows.push({ title: tr("Doramas destacados", "Featured dramas"), genre: "doramas", items: series.value.featured });
     }
     if (series.value.recent.length) {
-      rows.push({ title: tr("Doramas recién agregados", "Recently added dramas"), genre: "doramas", items: series.value.recent });
+      rows.push({ title: tr("Doramas recién agregados", "Recently added dramas"), genre: "doramas", ref: "tv", items: series.value.recent });
     }
   } else {
     log("home: doramas falló");
   }
   if (movies.status === "fulfilled") {
     if (movies.value.recent.length) {
-      rows.push({ title: tr("Películas", "Movies"), genre: "peliculas", items: movies.value.recent });
+      rows.push({ title: tr("Películas", "Movies"), genre: "peliculas", ref: "movies", items: movies.value.recent });
     }
   } else {
     log("home: películas falló");
   }
   if (!rows.length) throw kino.error("unavailable", "inicio sin resultados");
   return rows;
+}
+
+// ---- Catálogos (Ver más y Categorías) ---------------------------------------------------------
+
+// ref "tv" = doramas, ref "movies" = películas; el cursor es el número de página del sitio.
+export async function browse(ref, cursor) {
+  await null; // por si algo de abajo lanza: nunca antes del primer await
+  const r = String(ref || "");
+  if (r !== "tv" && r !== "movies") throw kino.error("not_found", "catálogo desconocido");
+  const n = Math.max(1, parseInt(cursor, 10) || 1);
+  const path = (r === "tv" ? "/tvshows/" : "/movies/") + (n > 1 ? "page/" + n + "/" : "");
+  const html = await getHtml(DM + path);
+  const i = html.indexOf('id="archive-content"');
+  const items = dmCards(i >= 0 ? html.slice(i) : html).slice(0, 100);
+  const hasNext = html.indexOf("/page/" + (n + 1) + "/") !== -1;
+  const page = { items };
+  if (hasNext && items.length) page.next = String(n + 1);
+  return page;
+}
+
+// Las fichas de la sección Categorías del plugin; cada una abre browse(ref, null).
+export async function categories() {
+  await null;
+  const [tv, mv] = await Promise.allSettled([dmHomePage("/tvshows/"), dmHomePage("/movies/")]);
+  const art = (res) => (res.status === "fulfilled" && res.value.recent[0]) ? res.value.recent[0].poster : undefined;
+  const tiles = [
+    { title: tr("Doramas", "Dramas"), ref: "tv", art: art(tv) },
+    { title: tr("Películas", "Movies"), ref: "movies", art: art(mv) },
+  ];
+  return tiles.map((t) => (t.art ? t : { title: t.title, ref: t.ref }));
 }
 
 // ---- Búsqueda unificada -----------------------------------------------------------------------
