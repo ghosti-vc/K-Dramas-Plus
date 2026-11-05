@@ -103,21 +103,22 @@ export async function home() {
   const rows = [];
   if (series.status === "fulfilled") {
     if (series.value.featured.length) {
-      rows.push({ title: tr("Doramas destacados", "Featured dramas"), genre: "doramas", items: series.value.featured });
+      rows.push({ title: tr("Doramas destacados", "Featured dramas"), items: series.value.featured });
     }
     if (series.value.recent.length) {
-      rows.push({ title: tr("Doramas recién agregados", "Recently added dramas"), genre: "doramas", ref: "tv", items: series.value.recent });
+      rows.push({ title: tr("Doramas recién agregados", "Recently added dramas"), ref: "tv", items: series.value.recent });
     }
   } else {
     log("home: doramas falló");
   }
   if (movies.status === "fulfilled") {
     if (movies.value.recent.length) {
-      rows.push({ title: tr("Películas", "Movies"), genre: "peliculas", ref: "movies", items: movies.value.recent });
+      rows.push({ title: tr("Películas", "Movies"), ref: "movies", items: movies.value.recent });
     }
   } else {
     log("home: películas falló");
   }
+  log("home filas=" + rows.length + " items=" + rows.map((r) => r.items.length).join(","));
   if (!rows.length) throw kino.error("unavailable", "inicio sin resultados");
   return rows;
 }
