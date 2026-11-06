@@ -45,12 +45,28 @@ function squash(text) {
 
 // Nunca lanza antes del primer await (los Kino viejos abortan la llamada si lo hace).
 async function getHtml(url) {
-  const r = await kino.fetch(url);
+  const host = String(url).replace(/^https?:\/\//, "").split("/")[0];
+  let r;
+  try {
+    r = await kino.fetch(url);
+  } catch (e) {
+    const why = String((e && e.message) || e).slice(0, 80);
+    log("fetch falló host=" + host + " motivo=" + why);
+    throw kino.error("unavailable", "fetch falló en " + host, {
+      userMessage: tr("No se pudo abrir " + host + ": " + why, "Could not open " + host + ": " + why),
+    });
+  }
   log("fetch status=" + r.status + " ok=" + r.ok);
   if (!r.ok) {
-    if (r.status === 404) throw kino.error("not_found", "el sitio respondió 404");
-    if (r.status === 429) throw kino.error("rate_limited", "el sitio respondió 429");
-    throw kino.error("unavailable", "el sitio respondió " + r.status);
+    const um = {
+      userMessage: tr(
+        host + " respondió con el error " + r.status + ".",
+        host + " answered with error " + r.status + "."
+      ),
+    };
+    if (r.status === 404) throw kino.error("not_found", "el sitio respondió 404", um);
+    if (r.status === 429) throw kino.error("rate_limited", "el sitio respondió 429", um);
+    throw kino.error("unavailable", "el sitio respondió " + r.status, um);
   }
   return r.text();
 }
@@ -463,6 +479,60 @@ function okUnavailable() {
   });
 }
 
+// ---- PeerTube de Doramed (video.doramed.tv): el reproductor de sus capítulos nuevos -----------
+
+const PT_HOST = "video.doramed.tv";
+const PT_EMBED = /(?:https?:)?\/\/video\.doramed\.tv\/videos\/embed\/([A-Za-z0-9_-]+)/i;
+const PT_HEADERS = { Referer: "https://video.doramed.tv/" };
+
+function ptUnavailable() {
+  return kino.error("unavailable", "peertube sin video", {
+    userMessage: tr(
+      "Este capítulo ya no está disponible en el reproductor del sitio. Prueba otra opción o busca el título de nuevo.",
+      "This episode is no longer available on the site's player. Try another option or search the title again."
+    ),
+  });
+}
+
+// Pide a la API de PeerTube los datos del video y arma el Stream: MP4 directo si lo hay
+// (la mejor calidad hasta 1080p) y el HLS como alternativa, o el HLS solo si no hay MP4.
+async function ptResolve(id) {
+  const txt = await getHtml("https://" + PT_HOST + "/api/v1/videos/" + id);
+  let v = null;
+  try { v = JSON.parse(txt); } catch (e) { log("peertube: JSON inválido id=" + id); }
+  if (!v || typeof v !== "object") throw ptUnavailable();
+
+  const resOf = (f) => Number(f && f.resolution && f.resolution.id) || 0;
+  const mp4 = (Array.isArray(v.files) ? v.files : [])
+    .filter((f) => f && typeof f.fileUrl === "string" && /^https:\/\//.test(f.fileUrl))
+    .sort((a, b) => resOf(b) - resOf(a)); // la mejor primero
+  let hls = null;
+  for (const pl of (Array.isArray(v.streamingPlaylists) ? v.streamingPlaylists : [])) {
+    if (pl && typeof pl.playlistUrl === "string" && /^https:\/\//.test(pl.playlistUrl)) { hls = pl.playlistUrl; break; }
+  }
+  log("peertube: id=" + id + " mp4=" + mp4.map(resOf).join(",") + " hls=" + (hls ? "si" : "no"));
+  if (!mp4.length && !hls) throw ptUnavailable();
+
+  const label = (f) => "Doramed · " + (resOf(f) ? resOf(f) + "p" : "MP4");
+  const primary = mp4.find((f) => resOf(f) <= 1080) || mp4[0];
+  const copy = (f) => ({ url: f.fileUrl, mime: "video/mp4", headers: PT_HEADERS, label: label(f) });
+  const copies = [];
+  if (primary) {
+    const pr = resOf(primary);
+    for (const f of mp4) if (resOf(f) < pr) copies.push(copy(f));
+    if (hls) copies.push({ url: hls, mime: "application/x-mpegurl", headers: PT_HEADERS, label: "Doramed · HLS" });
+    for (const f of mp4.slice().reverse()) if (resOf(f) > pr) copies.push(copy(f));
+  }
+
+  const out = primary
+    ? { url: primary.fileUrl, mime: "video/mp4", label: label(primary) }
+    : { url: hls, mime: "application/x-mpegurl", label: "Doramed · HLS" };
+  out.headers = PT_HEADERS;
+  out.expiresInSeconds = 1800;
+  if (copies.length) out.alternatives = copies.slice(0, 8);
+  return out;
+}
+
 export async function resolve(ref) {
   await null; // las validaciones de abajo pueden lanzar: nunca antes del primer await
   const raw = String(ref || "");
@@ -497,6 +567,7 @@ export async function resolve(ref) {
 
   const playable = [];
   const okIds = [];
+  const ptIds = [];
   const re = /<iframe[^>]*src=(['"])([^'"]+)\1[^>]*>/g;
   let m;
   while ((m = re.exec(html))) {
@@ -506,10 +577,25 @@ export async function resolve(ref) {
       if (okIds.indexOf(ok[1]) < 0) okIds.push(ok[1]);
       continue;
     }
+    const pt = PT_EMBED.exec(src);
+    if (pt) {
+      if (ptIds.indexOf(pt[1]) < 0) ptIds.push(pt[1]);
+      continue;
+    }
     const p = playableFromIframe(src);
     if (p && !playable.some((x) => x.url === p.url)) playable.push(p);
   }
-  log("resolve: directos=" + playable.length + " okru=" + okIds.length);
+  log("resolve: directos=" + playable.length + " peertube=" + ptIds.length + " okru=" + okIds.length);
+
+  // Sin video directo pero con PeerTube de Doramed: se resuelve; si falla y hay OK.ru, se prueba OK.ru.
+  if (!playable.length && ptIds.length) {
+    try {
+      return await ptResolve(ptIds[0]);
+    } catch (e) {
+      log("peertube falló id=" + ptIds[0]);
+      if (!okIds.length) throw e;
+    }
+  }
 
   // Sin video directo pero con OK.ru: se resuelve el primero y los demás quedan como copias perezosas.
   if (!playable.length && okIds.length) {
