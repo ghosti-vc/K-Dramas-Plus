@@ -521,10 +521,20 @@ export async function resolve(ref) {
   }
 
   if (!playable.length) {
+    // Diagnóstico: lista los dominios de los reproductores que trae la página del capítulo.
+    const found = [];
+    const rf = /<iframe[^>]*src=(['"])([^'"]+)\1/g;
+    let f;
+    while ((f = rf.exec(html))) {
+      const h = decodeEntities(f[2]).replace(/^(?:https?:)?\/\//, "").split(/[\/?#]/)[0];
+      if (h && found.indexOf(h) < 0) found.push(h);
+    }
+    log("resolve: reproductores=" + found.join(","));
+    const extra = found.length ? " [" + found.slice(0, 3).join(", ") + "]" : "";
     throw kino.error("unavailable", "sin video directo", {
       userMessage: tr(
-        "Este capítulo solo está en reproductores que el plugin no puede abrir. Prueba otra opción del capítulo o busca el título de nuevo.",
-        "This episode is only on players the plugin can't open. Try another option or search the title again."
+        "Este capítulo solo está en reproductores que el plugin no puede abrir. Prueba otra opción del capítulo o busca el título de nuevo." + extra,
+        "This episode is only on players the plugin can't open. Try another option or search the title again." + extra
       ),
     });
   }
