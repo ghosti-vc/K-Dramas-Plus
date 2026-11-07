@@ -1,27 +1,20 @@
 {
   "id": "k-dramas-plus",
   "name": "K-Dramas Plus",
-  "version": "0.6.11",
-  "apiVersion": 9,
+  "version": "0.5.9",
+  "apiVersion": 6,
   "entry": "plugin.js",
-  "description": "Doramas en audio latino. Búsqueda unificada en Doramed Play (MP4 directo) y DoramasFox (solo opciones en latino, capturadas con el navegador de Kino).",
+  "description": "Doramas en audio latino. Búsqueda unificada en Doramed Play (reproduce sus capítulos en MP4) y Dorama Express (catálogo y episodios).",
   "author": "ghosti-vc",
   "homepage": "https://github.com/ghosti-vc/K-Dramas-Plus",
-  "browser": true,
-  "fetchHosts": "any",
   "hosts": [
     "www.doramedplay.com",
     "doramedplay.com",
     "doramaexpress.com",
     "www.doramaexpress.com",
-    "doramafox.es",
-    "www.doramafox.es",
     "ok.ru",
     "www.ok.ru",
-    "video.doramed.tv",
-    "playmogo.com",
-    "player.abyssplayer.com",
-    "doramasfoxito.p2pplay.online"
+    "video.doramed.tv"
   ],
   "streamHosts": "any",
   "capabilities": [
