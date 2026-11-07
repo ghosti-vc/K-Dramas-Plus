@@ -4,7 +4,7 @@
   "version": "0.6.6",
   "apiVersion": 6,
   "entry": "plugin.js",
-  "description": "Doramas en audio latino. Búsqueda unificada en Doramed Play (MP4 directo) y DoramasFox (solo opciones en latino, capturadas con el navegador de Kino).",
+  "description": "K Dramas en audio latino en emision peliculas y series y mas populares.",
   "author": "ghosti-vc",
   "homepage": "https://github.com/ghosti-vc/K-Dramas-Plus",
   "browser": true,
