@@ -1,7 +1,7 @@
 {
   "id": "k-dramas-plus",
   "name": "K-Dramas Plus",
-  "version": "0.6.7",
+  "version": "0.6.8",
   "apiVersion": 9,
   "entry": "plugin.js",
   "description": "Doramas en audio latino. Búsqueda unificada en Doramed Play (MP4 directo) y DoramasFox (solo opciones en latino, capturadas con el navegador de Kino).",
