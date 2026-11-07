@@ -802,7 +802,7 @@ function dfOptions(html) {
 }
 
 // Abre el reproductor embebido con el navegador oculto de Kino y toma el video que encuentra.
-async function dfCapture(embedUrl) {
+async function dfCapture(embedUrl, ms) {
   if (typeof kino === "undefined" || !kino.browser || typeof kino.browser.capture !== "function") {
     throw kino.error("unavailable", "este Kino no trae navegador", {
       userMessage: tr(
@@ -811,7 +811,7 @@ async function dfCapture(embedUrl) {
       ),
     });
   }
-  const page = await kino.browser.capture(embedUrl, { timeoutMs: 7000 });
+  const page = await kino.browser.capture(embedUrl, { timeoutMs: ms || 12000 });
   const media = (page && Array.isArray(page.media) && page.media.length) ? page.media : [];
   const first = media.find((x) => x && typeof x.url === "string" && /^https?:\/\//.test(x.url));
   if (!first) {
@@ -831,7 +831,7 @@ async function dfCapture(embedUrl) {
 }
 
 // Pide a la API de DoramasFox la URL del reproductor de una opción y la captura.
-async function dfTryOption(opt) {
+async function dfTryOption(opt, captureMs) {
   const api = DF + "/wp-json/dooplayer/v2/" + opt.post + "/" + opt.type + "/" + opt.nume;
   const txt = await getHtml(api);
   let j = null;
@@ -846,7 +846,7 @@ async function dfTryOption(opt) {
     });
   }
   log("df api post=" + opt.post + " nume=" + opt.nume + " embed=" + embed.slice(0, 60));
-  const stream = await dfCapture(embed);
+  const stream = await dfCapture(embed, captureMs);
   stream.label = opt.lang + " · " + opt.name;
   return stream;
 }
@@ -922,10 +922,12 @@ export async function resolve(ref) {
     let lastErr = null;
     const t0 = Date.now();
     for (const opt of opts.slice(0, 3)) {
-      // resolve tiene 20 s en total: no se empieza otra opción si ya pasaron 6 s.
-      if (Date.now() - t0 > 6000) break;
+      // resolve tiene 20 s en total: la captura usa el tiempo que quede (máx. 15 s) y no se
+      // empieza otra opción si ya no alcanza.
+      const left = 17000 - (Date.now() - t0);
+      if (left < 5000) break;
       try {
-        const stream = await dfTryOption(opt);
+        const stream = await dfTryOption(opt, Math.min(15000, left - 2000));
         const alts = [];
         for (const o of opts) {
           if (o === opt) continue;
@@ -938,11 +940,11 @@ export async function resolve(ref) {
         return stream;
       } catch (e) {
         lastErr = e;
-        log("df opción falló post=" + opt.post + " nume=" + opt.nume);
+        log("df opción falló post=" + opt.post + " nume=" + opt.nume + " motivo=" + String((e && (e.code || e.message)) || e).slice(0, 80));
         // blocked, busy o timeout del reproductor: se prueba la siguiente opción.
       }
     }
-    throw dfNoVideo(opts);
+    throw lastErr || dfNoVideo(opts);
   }
 
   if (!raw.startsWith("dm|")) throw kino.error("not_found", "referencia desconocida");
