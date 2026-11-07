@@ -3,20 +3,14 @@
 //  - "dm|" Doramed Play (www.doramedplay.com): inicio, búsqueda, episodios y reproducción (MP4 directo).
 //  - "dx|" Dorama Express (doramaexpress.com): búsqueda y episodios; su video está detrás de
 //    candados del sitio (temporizador, VIP) que el plugin no salta: al reproducir avisa.
-//  - "df|" DoramasFox (doramafox.es): inicio, búsqueda, episodios y reproducción. Sus capítulos
-//    se abren en reproductores embebidos (Abyss, Playmogo, P2PPlay): se capturan con el navegador
-//    oculto de Kino (kino.browser.capture).
 // Pendiente: "pn|" Pandrama (bloquea el acceso automatizado).
 
 const DM = "https://www.doramedplay.com";
 const DX = "https://doramaexpress.com";
-const DF = "https://doramafox.es";
 const MAX_RESULTS = 100;
 const HOME_ROW = 20;   // títulos por fila en Inicio
 const CAT_VIEW = 60;   // títulos que carga cada tanda de "Ver más" y de Categorías
 const CAT_MAX = 100;   // tope de Kino por página
-// Orden de las filas del Inicio (por id). Lo que no esté aquí va al final.
-const HOME_ORDER = ["df-emision", "dm-doramas", "dm-destacados", "df-doramas", "df-peliculas", "dm-peliculas"];
 
 function log(...args) {
   try { kino.log(...args); } catch { /* el registro no debe romper nada */ }
@@ -59,15 +53,15 @@ async function getHtml(url) {
     const why = String((e && e.message) || e).slice(0, 80);
     log("fetch falló host=" + host + " motivo=" + why);
     throw kino.error("unavailable", "fetch falló en " + host, {
-      userMessage: tr("No se pudo abrir el sitio. Prueba de nuevo en un rato.", "Could not open the site. Try again in a while."),
+      userMessage: tr("No se pudo abrir " + host + ": " + why, "Could not open " + host + ": " + why),
     });
   }
   log("fetch status=" + r.status + " ok=" + r.ok);
   if (!r.ok) {
     const um = {
       userMessage: tr(
-        "El sitio respondió con el error " + r.status + ". Prueba de nuevo en un rato.",
-        "The site answered with error " + r.status + ". Try again in a while."
+        host + " respondió con el error " + r.status + ".",
+        host + " answered with error " + r.status + "."
       ),
     };
     if (r.status === 404) throw kino.error("not_found", "el sitio respondió 404", um);
@@ -85,12 +79,6 @@ function bigPoster(src) {
 }
 
 // Lee las tarjetas <article class="item ..."> de un trozo de HTML de Doramed Play (tema Dooplay).
-// Categorías de Kino para cada título (ids de la lista oficial).
-function withGenres(item) {
-  item.genres = item.kind === "movie" ? ["peliculas", "drama"] : ["series", "drama"];
-  return item;
-}
-
 function dmCards(chunk) {
   const items = [];
   const seen = new Set();
@@ -107,7 +95,7 @@ function dmCards(chunk) {
     const ratingMatch = /class="rating"[^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*</.exec(b);
     const rating = ratingMatch ? Number(ratingMatch[1]) : 0;
     const clean = a[1].replace(/^https:\/\/www\.doramedplay\.com\//, "/");
-    items.push(withGenres({
+    items.push({
       id: "dm-" + clean.replace(/[^a-z0-9-]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 80),
       ref: "dm|" + a[1],
       title: title.slice(0, 200),
@@ -115,86 +103,9 @@ function dmCards(chunk) {
       year: yearMatch ? Number(yearMatch[1]) : undefined,
       poster: img ? bigPoster(img[1]) : undefined,
       rating: rating > 0 && rating <= 10 ? rating : undefined,
-    }));
+    });
   }
   return items;
-}
-
-// Lee las tarjetas <article> de un trozo de HTML de DoramasFox (tema Dooplay).
-// Series: /series/<slug>/  Películas: /peliculas/<slug>/
-function dfCards(chunk) {
-  const items = [];
-  const seen = new Set();
-  for (const b of String(chunk || "").split("<article").slice(1)) {
-    const a = /<a href="(https:\/\/doramafox\.es\/(series|peliculas)\/[a-z0-9-]+\/)"/.exec(b);
-    if (!a || seen.has(a[1])) continue;
-    const img = /<img[^>]*src="([^"]+)"[^>]*alt="([^"]*)"/.exec(b);
-    const h3 = /<h3[^>]*>([\s\S]*?)<\/h3>/.exec(b);
-    const title = stripTags(h3 ? h3[1] : (img ? img[2] : ""));
-    if (!title) continue;
-    seen.add(a[1]);
-    const yearMatch = /(\d{4})/.exec(stripTags(b).slice(0, 300));
-    const clean = a[1].replace(/^https:\/\/doramafox\.es\//, "/");
-    items.push(withGenres({
-      id: "df-" + clean.replace(/[^a-z0-9-]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 80),
-      ref: "df|" + a[1],
-      title: title.slice(0, 200),
-      kind: a[2] === "peliculas" ? "movie" : "series",
-      year: yearMatch ? Number(yearMatch[1]) : undefined,
-      poster: img ? bigPoster(img[1]) : undefined,
-    }));
-  }
-  return items;
-}
-
-// Trozo de HTML desde un marcador hasta el siguiente <header> o <section>.
-function dfSection(html, idStart) {
-  const i = html.indexOf(idStart);
-  if (i < 0) return "";
-  let end = html.indexOf("<header", i);
-  const e2 = html.indexOf("<section", i);
-  if (end < 0 || (e2 >= 0 && e2 < end)) end = e2;
-  return html.slice(i, end > 0 ? end : i + 60000);
-}
-
-// Página de inicio de DoramasFox: series nuevas, en emisión y subtituladas.
-// La lista oficial del sitio con audio latino: /audio/latino/ (+ page/N/). Mezcla series y películas.
-async function dfLatinoPage(n) {
-  const html = await getHtml(DF + "/audio/latino/" + (n > 1 ? "page/" + n + "/" : ""));
-  return {
-    items: dfCards(html),
-    hasNext: html.indexOf("/page/" + (n + 1) + "/") !== -1,
-  };
-}
-
-// Series en emisión (/estado/emision/) solo con audio latino. Se pide con ?audio=latino; si la
-// página no trae la marca "term-latino" (el sitio no aplicó el filtro), se dejan solo las tarjetas
-// que muestran la bandera latina (mx.png). Sin esa bandera no se puede comprobar: no se muestra.
-async function dfEmisionPage(n) {
-  const html = await getHtml(DF + "/estado/emision/" + (n > 1 ? "page/" + n + "/" : "") + "?audio=latino");
-  const filtered = /<body[^>]*class="[^"]*term-latino/.test(html);
-  let items;
-  if (filtered) {
-    items = dfCards(html);
-  } else {
-    const blocks = html.split("<article").slice(1).filter((b) => /flags\/mx\.png/i.test(b));
-    items = dfCards(blocks.map((b) => "<article" + b).join(""));
-  }
-  log("df emision filtro=" + (filtered ? "sitio" : "banderas") + " items=" + items.length);
-  return { items, hasNext: html.indexOf("/page/" + (n + 1) + "/") !== -1 };
-}
-
-// Inicio de DoramasFox: solo lo que el sitio lista con audio latino.
-async function dfHomePage() {
-  const [page, em] = await Promise.allSettled([dfLatinoPage(1), dfEmisionPage(1)]);
-  if (page.status !== "fulfilled") throw page.reason; // sin la lista latina no hay Inicio de Fox
-  const out = {
-    series: page.value.items.filter((x) => x.kind === "series").slice(0, HOME_ROW),
-    movies: page.value.items.filter((x) => x.kind === "movie").slice(0, HOME_ROW),
-    emision: em.status === "fulfilled" ? em.value.items.slice(0, HOME_ROW) : [],
-  };
-  log("df home latino series=" + out.series.length + " peliculas=" + out.movies.length + " emision=" + out.emision.length);
-  return out;
 }
 
 // Completa "Destacados" con los títulos mejor calificados de la lista reciente
@@ -228,10 +139,9 @@ async function dmHomePage(path) {
 
 export async function home() {
   await null; // por si algo de abajo lanza: nunca antes del primer await
-  const [series, movies, fox] = await Promise.allSettled([
+  const [series, movies] = await Promise.allSettled([
     dmHomePage("/tvshows/"),
     dmHomePage("/movies/"),
-    dfHomePage(),
   ]);
   // Cada fila NECESITA un "id" único y un "title": Kino descarta las filas que no lo traen.
   const rows = [];
@@ -267,56 +177,9 @@ export async function home() {
   } else {
     log("home: películas falló");
   }
-  if (fox.status === "fulfilled") {
-    if (fox.value.series.length) {
-      rows.push({
-        id: "df-doramas",
-        title: tr("K Dramas", "K Dramas"),
-        ref: "df-tv",
-        items: fox.value.series.slice(0, HOME_ROW),
-      });
-    }
-    if (fox.value.emision.length) {
-      rows.push({
-        id: "df-emision",
-        title: tr("En Emisión", "Airing"),
-        ref: "df-emision",
-        items: fox.value.emision.slice(0, HOME_ROW),
-      });
-    }
-    if (fox.value.movies.length) {
-      rows.push({
-        id: "df-peliculas",
-        title: tr("Películas en Latino", "Latin Spanish Movies"),
-        ref: "df-movies",
-        items: fox.value.movies.slice(0, HOME_ROW),
-      });
-    }
-  } else {
-    log("home: doramafox falló");
-  }
-  // Kino descarta las filas sin "id" o sin "title" y los títulos sin "id", "ref" y "title":
-  // aquí se deja pasar solo lo que los trae, con ids de fila únicos.
-  const seenRow = new Set();
-  const good = [];
-  for (const r of rows) {
-    if (!r || typeof r.id !== "string" || !r.id || typeof r.title !== "string" || !r.title) continue;
-    if (seenRow.has(r.id)) continue;
-    const items = (Array.isArray(r.items) ? r.items : []).filter(
-      (x) => x && typeof x.id === "string" && x.id && typeof x.ref === "string" && x.ref && typeof x.title === "string" && x.title
-    );
-    if (!items.length) continue;
-    seenRow.add(r.id);
-    const movies = items.filter((x) => x.kind === "movie").length;
-    r.items = items;
-    r.genre = movies > items.length / 2 ? "peliculas" : "series";
-    good.push(r);
-  }
-  log("home filas=" + good.length + " items=" + good.map((r) => r.id + ":" + r.items.length).join(","));
-  if (!good.length) throw kino.error("unavailable", "inicio sin resultados");
-  const pos = (r) => { const i = HOME_ORDER.indexOf(r.id); return i < 0 ? HOME_ORDER.length : i; };
-  const ordered = good.map((r, i) => ({ r, i })).sort((a, b) => (pos(a.r) - pos(b.r)) || (a.i - b.i)).map((o) => o.r);
-  return ordered.slice(0, 20);
+  log("home filas=" + rows.length + " items=" + rows.map((r) => r.items.length).join(","));
+  if (!rows.length) throw kino.error("unavailable", "inicio sin resultados");
+  return rows;
 }
 
 // ---- Catálogos (Ver más y Categorías) ---------------------------------------------------------
@@ -332,23 +195,12 @@ async function dmArchivePage(r, n) {
   };
 }
 
-// Una página del archivo de DoramasFox: /series/ o /peliculas/ (+ /page/N/).
-async function dfArchivePage(r, n) {
-  if (r === "df-emision") return dfEmisionPage(n);
-  const kind = r === "df-movies" ? "movie" : "series";
-  const page = await dfLatinoPage(n);
-  return { items: page.items.filter((x) => x.kind === kind), hasNext: page.hasNext };
-}
-
-// ref "tv" = doramas, ref "movies" = películas, ref "df-tv" = DoramasFox series,
-// ref "df-movies" = DoramasFox películas; el cursor es el número de página del sitio.
+// ref "tv" = doramas, ref "movies" = películas; el cursor es el número de página del sitio.
 // Cada tanda junta varias páginas del sitio hasta llegar a unos 60 títulos (máximo 100).
 export async function browse(ref, cursor) {
   await null; // por si algo de abajo lanza: nunca antes del primer await
   const r = String(ref || "");
-  const isDf = r === "df-tv" || r === "df-movies" || r === "df-emision";
-  if (r !== "tv" && r !== "movies" && !isDf) throw kino.error("not_found", "catálogo desconocido");
-  const pageFn = isDf ? dfArchivePage : dmArchivePage;
+  if (r !== "tv" && r !== "movies") throw kino.error("not_found", "catálogo desconocido");
   const n = Math.max(1, parseInt(cursor, 10) || 1);
   const items = [];
   const seen = new Set();
@@ -358,7 +210,7 @@ export async function browse(ref, cursor) {
   let rounds = 0;
   while (hasNext && items.length < CAT_VIEW && rounds < 3) {
     rounds++;
-    const batch = await Promise.allSettled([0, 1, 2].map((k) => pageFn(r, p + k)));
+    const batch = await Promise.allSettled([0, 1, 2].map((k) => dmArchivePage(r, p + k)));
     let stop = false;
     for (let k = 0; k < batch.length; k++) {
       const res = batch[k];
@@ -386,18 +238,11 @@ export async function browse(ref, cursor) {
 // Cada mosaico lleva "id" (como en el ejemplo del contrato).
 export async function categories() {
   await null;
-  const [tv, mv, fox] = await Promise.allSettled([dmHomePage("/tvshows/"), dmHomePage("/movies/"), dfHomePage()]);
-  const art = (res) => {
-    if (res.status !== "fulfilled") return undefined;
-    const first = res.value.recent ? res.value.recent[0] : res.value.series[0];
-    return first ? first.poster : undefined;
-  };
-  const artMovies = (res) => (res.status === "fulfilled" && res.value.movies[0] ? res.value.movies[0].poster : undefined);
+  const [tv, mv] = await Promise.allSettled([dmHomePage("/tvshows/"), dmHomePage("/movies/")]);
+  const art = (res) => (res.status === "fulfilled" && res.value.recent[0]) ? res.value.recent[0].poster : undefined;
   const tiles = [
     { id: "doramas", title: tr("Doramas", "Dramas"), ref: "tv", art: art(tv) },
     { id: "peliculas", title: tr("Películas", "Movies"), ref: "movies", art: art(mv) },
-    { id: "fox-doramas", title: "Fox · " + tr("Doramas", "Dramas"), ref: "df-tv", art: art(fox) },
-    { id: "fox-peliculas", title: "Fox · " + tr("Películas", "Movies"), ref: "df-movies", art: artMovies(fox) },
   ];
   return tiles.map((t) => (t.art ? t : { id: t.id, title: t.title, ref: t.ref }));
 }
@@ -409,10 +254,9 @@ export async function search(query) {
   const q = stripTags(query && query.q).slice(0, 100);
   if (!q) return [];
   const enc = encodeURIComponent(q);
-  // Dorama Express ya no se busca: su video nunca se reproduce aquí.
-  const [dm, df] = await Promise.allSettled([
+  const [dm, dx] = await Promise.allSettled([
     dmSearch(enc),
-    dfSearch(enc),
+    dxSearch(enc),
   ]);
   const out = [];
   const seen = new Set();
@@ -424,8 +268,8 @@ export async function search(query) {
   };
   // Doramed Play primero: si el título está en las dos, queda el que sí se reproduce.
   if (dm.status === "fulfilled") dm.value.forEach(add);
-  if (df.status === "fulfilled") df.value.forEach(add);
-  if (!out.length && dm.status === "rejected" && df.status === "rejected") throw dm.reason;
+  if (dx.status === "fulfilled") dx.value.forEach(add);
+  if (!out.length && dm.status === "rejected" && dx.status === "rejected") throw dm.reason;
   return out.slice(0, MAX_RESULTS);
 }
 
@@ -444,7 +288,7 @@ async function dmSearch(enc) {
     const poster = imgMatch ? bigPoster(imgMatch[1]) : undefined;
     const desc = /<div class="contenido"><p>([\s\S]*?)<\/p><\/div>/.exec(b);
     const clean = m[1].replace(/^https:\/\/www\.doramedplay\.com\//, "/");
-    items.push(withGenres({
+    items.push({
       id: "dm-" + clean.replace(/[^a-z0-9-]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 80),
       ref: "dm|" + m[1],
       title: stripTags(m[2]).slice(0, 200),
@@ -452,7 +296,7 @@ async function dmSearch(enc) {
       year: year ? Number(year[1]) : undefined,
       poster,
       overview: desc ? stripTags(desc[1]).slice(0, 400) : undefined,
-    }));
+    });
   }
   return items;
 }
@@ -471,52 +315,13 @@ async function dxSearch(enc) {
     const h3 = /<h3>([^<]*)<\/h3>/.exec(b);
     const title = h3 ? stripTags(h3[1]) : stripTags(m[3]);
     const slug = m[1].replace(/^https:\/\/doramaexpress\.com\//, "").replace(/\/$/, "");
-    items.push(withGenres({
+    items.push({
       id: "dx-" + slug.replace(/[^a-z0-9-]+/gi, "-").slice(0, 80),
       ref: "dx|" + m[1],
       title: title.slice(0, 200),
       kind,
       poster: img ? img[1] : undefined,
-    }));
-  }
-  return items;
-}
-
-// ---- DoramasFox -------------------------------------------------------------------------------
-
-// Búsqueda dentro de la sección de audio latino del sitio (/audio/latino/?s=): solo devuelve
-// títulos con audio latino. Cada resultado trae sus banderas de idioma (mx.png = latino);
-// si trae banderas y ninguna es latina, se descarta. El sitio también tiene una búsqueda en vivo
-// (/wp-json/dooplay/search/) pero pide "nonce" y no se puede usar desde el plugin.
-async function dfSearch(enc) {
-  const html = await getHtml(DF + "/audio/latino/?s=" + enc);
-  const items = [];
-  const seen = new Set();
-  const blocks = html.split('<div class="result-item">').slice(1);
-  for (const b of blocks) {
-    const m = /<a href="(https:\/\/doramafox\.es\/(?:series|peliculas)\/[a-z0-9-]+\/)"/.exec(b);
-    if (!m) continue;
-    if (seen.has(m[1])) continue;
-    seen.add(m[1]);
-    const img = /<img[^>]*src="([^"]+)"[^>]*alt="([^"]*)"/.exec(b);
-    const h3 = /<div class="title"><a[^>]*>([\s\S]*?)<\/a>/.exec(b);
-    const title = stripTags(h3 ? h3[1] : (img ? img[2] : ""));
-    if (!title) continue;
-    const flags = [];
-    const rf = /<span class="flag\d*"><img[^>]*src=(['"])([^'"]+)\1/g;
-    let f;
-    while ((f = rf.exec(b))) flags.push(f[2]);
-    if (flags.length && !flags.some((u) => /mx\.png/i.test(u))) continue; // sin audio latino
-    const year = /<span class="year">(\d{4})</.exec(b);
-    const clean = m[1].replace(/^https:\/\/doramafox\.es\//, "/");
-    items.push(withGenres({
-      id: "df-" + clean.replace(/[^a-z0-9-]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 80),
-      ref: "df|" + m[1],
-      title: title.slice(0, 200),
-      kind: m[1].indexOf("/peliculas/") !== -1 ? "movie" : "series",
-      year: year ? Number(year[1]) : undefined,
-      poster: img ? bigPoster(img[1]) : undefined,
-    }));
+    });
   }
   return items;
 }
@@ -526,12 +331,10 @@ async function dfSearch(enc) {
 export async function episodes(ref) {
   await null; // las validaciones de abajo pueden lanzar: nunca antes del primer await
   const raw = String(ref || "");
-  if (!raw.startsWith("dm|") && !raw.startsWith("dx|") && !raw.startsWith("df|")) throw kino.error("not_found", "referencia desconocida");
+  if (!raw.startsWith("dm|") && !raw.startsWith("dx|")) throw kino.error("not_found", "referencia desconocida");
   const url = raw.slice(3);
   const html = await getHtml(url);
-  if (raw.startsWith("dm|")) return dmEpisodes(html, url);
-  if (raw.startsWith("dx|")) return dxEpisodes(html, url);
-  return dfEpisodes(html, url);
+  return raw.startsWith("dm|") ? dmEpisodes(html, url) : dxEpisodes(html, url);
 }
 
 function dmEpisodes(html, url) {
@@ -584,37 +387,6 @@ function dxEpisodes(html, url) {
   if (!eps.length) throw kino.error("not_found", "no se encontró la lista de episodios");
   return {
     series: { title: title ? stripTags(title[1]) : url, poster: poster ? poster[1] : undefined },
-    episodes: eps,
-  };
-}
-
-// En DoramasFox los enlaces de episodio son /episodio/<slug>-1x4-.../ y el número
-// viene dentro del slug: es lo más robusto (el HTML envuelve <li> dentro de <a>).
-function dfEpisodes(html, url) {
-  const title = /<h1[^>]*>([\s\S]*?)<\/h1>/.exec(html);
-  const p1 = /class=(['"])poster\1[^>]*>\s*<img[^>]*src=(['"])([^'"]+)\2/i.exec(html);
-  const p2 = /property=(['"])og:image\1[^>]*content=(['"])([^'"]+)\2/i.exec(html);
-  const poster = p1 ? p1[3] : (p2 ? p2[3] : undefined);
-
-  const eps = [];
-  const seen = new Set();
-  const re = /href=['"](https:\/\/doramafox\.es\/episodio\/([a-z0-9-]+)\/)['"]/g;
-  let m;
-  while ((m = re.exec(html))) {
-    if (seen.has(m[1])) continue;
-    seen.add(m[1]);
-    const sn = /(\d+)x(\d+)/.exec(m[2]);
-    eps.push({
-      season: sn ? parseInt(sn[1], 10) : 1,
-      number: sn ? parseInt(sn[2], 10) : eps.length + 1,
-      ref: "df|" + m[1],
-      title: tr("Episodio ", "Episode ") + (sn ? sn[2] : eps.length),
-    });
-  }
-  if (!eps.length) throw kino.error("not_found", "no se encontró la lista de episodios");
-  eps.sort((a, b) => (a.season - b.season) || (a.number - b.number));
-  return {
-    series: { title: title ? stripTags(title[1]) : url, poster },
     episodes: eps,
   };
 }
@@ -761,128 +533,6 @@ async function ptResolve(id) {
   return out;
 }
 
-// ---- DoramasFox: opciones de reproductor y captura con el navegador oculto --------------------
-
-// Lee las opciones de reproductor de la página del capítulo o película.
-// Cada <li class='dooplay_player_option'> trae data-type, data-post, data-nume,
-// el nombre en <span class='title'> y el idioma en la bandera (<img .../flags/mx.png>).
-// La opción "trailer" (YouTube) se salta. El orden preferido es: Latino, Subtitulado, Inglés.
-function dfOptions(html) {
-  const opts = [];
-  const re = /<li[^>]*class=(['"])dooplay_player_option\1[^>]*>/g;
-  let m;
-  while ((m = re.exec(html))) {
-    const li = m[0];
-    const chunk = html.slice(m.index, m.index + 1200);
-    const attr = (name) => {
-      const a = new RegExp("data-" + name + "=(['\"])([^'\"]+)\\1").exec(li);
-      return a ? a[2] : "";
-    };
-    const type = attr("type");
-    const post = attr("post");
-    const nume = attr("nume");
-    const name = /<span class=(['"])title\1>([^<]*)<\/span>/.exec(chunk);
-    const flag = /<img src=(['"])([^'"]*\/flags\/[^'"]+)\1/.exec(chunk);
-    if (!type || !post || !nume || nume === "trailer") continue;
-    let lang = tr("Subtitulado", "Subbed");
-    if (flag && /mx\.png/i.test(flag[2])) lang = "Latino";
-    else if (flag && /en\.png/i.test(flag[2])) lang = tr("Inglés", "English");
-    else if (flag && /Picsart/i.test(flag[2])) lang = tr("Subtitulado", "Subbed");
-    if (lang !== "Latino" && name && /latino/i.test(name[2]) && !(flag && /en\.png/i.test(flag[2]))) lang = "Latino";
-    opts.push({
-      post, type, nume,
-      name: name ? stripTags(name[2]) : nume,
-      lang,
-      rank: lang === "Latino" ? 0 : (lang === tr("Subtitulado", "Subbed") ? 1 : 2),
-    });
-  }
-  opts.sort((a, b) => a.rank - b.rank);
-  log("df opciones=" + opts.length + " " + opts.map((o) => o.lang + "/" + o.name).join(","));
-  return opts;
-}
-
-// Abre el reproductor embebido con el navegador oculto de Kino y toma el video que encuentra.
-async function dfCapture(embedUrl, ms) {
-  if (typeof kino === "undefined" || !kino.browser || typeof kino.browser.capture !== "function") {
-    throw kino.error("unavailable", "este Kino no trae navegador", {
-      userMessage: tr(
-        "Tu versión de Kino no puede abrir este reproductor. Actualiza la app y prueba de nuevo.",
-        "Your Kino version can't open this player. Update the app and try again."
-      ),
-    });
-  }
-  // headers: Referer de la página del sitio para la primera carga del reproductor.
-  const copts = { timeoutMs: ms || 12000, headers: { Referer: DF + "/" } };
-  // DIAGNÓSTICO: con captureAll (Kino 0.9.54+) y returnCookiesOnTimeout, al agotarse el tiempo Kino
-  // devuelve las peticiones que hizo la página en vez de fallar; se anotan en el registro.
-  const diag = kino.browser.captureAll === true;
-  // alsoMatch ["."]: recoge TODAS las peticiones (máx. 20), no solo las que parecen video.
-  if (diag) { copts.captureAll = true; copts.returnCookiesOnTimeout = true; copts.alsoMatch = ["."]; }
-  const page = await kino.browser.capture(embedUrl, copts);
-  const media = (page && Array.isArray(page.media) && page.media.length) ? page.media : [];
-  log("df captura media=" + media.length + " timedOut=" + !!(page && page.timedOut) + " diag=" + diag);
-  if (page && page.finalUrl) {
-    try { const fu = new URL(page.finalUrl); log("df final " + fu.host + fu.pathname.slice(0, 40)); } catch (e) { /* url rara */ }
-  }
-  if (page && Array.isArray(page.requests)) {
-    log("df req total=" + page.requests.length);
-    for (const q of page.requests.slice(0, 25)) {
-      try {
-        const u = new URL(q.url);
-        log("df req " + q.method + " " + u.host + u.pathname.slice(0, 60));
-      } catch (e) { /* url rara: se salta */ }
-    }
-  }
-  const first = media.find((x) => x && typeof x.url === "string" && /^https?:\/\//.test(x.url));
-  if (!first) {
-    throw kino.error("unavailable", "captura sin video", {
-      userMessage: tr(
-        "El reproductor de este capítulo no entregó el video. Prueba otra opción o busca el título de nuevo.",
-        "This episode's player didn't return the video. Try another option or search the title again."
-      ),
-    });
-  }
-  const out = { url: first.url };
-  // El video suele exigir el Referer y el User-Agent con que lo pidió el reproductor: se pasan tal cual.
-  if (first.headers && typeof first.headers === "object" && Object.keys(first.headers).length) out.headers = first.headers;
-  if (first.mime) out.mime = first.mime;
-  else if (first.mimeType) out.mime = first.mimeType;
-  else if (/\.m3u8(\?|$)/i.test(first.url)) out.mime = "application/x-mpegurl";
-  else out.mime = "video/mp4";
-  if (page.subtitles && page.subtitles.es) out.subtitles = { es: page.subtitles.es };
-  return out;
-}
-
-// Pide a la API de DoramasFox la URL del reproductor de una opción y la captura.
-async function dfTryOption(opt, captureMs) {
-  const api = DF + "/wp-json/dooplayer/v2/" + opt.post + "/" + opt.type + "/" + opt.nume;
-  const txt = await getHtml(api);
-  let j = null;
-  try { j = JSON.parse(txt); } catch (e) { log("df: JSON inválido post=" + opt.post + " nume=" + opt.nume); }
-  const embed = j && typeof j.embed_url === "string" ? j.embed_url : "";
-  if (!/^https?:\/\//.test(embed)) {
-    throw kino.error("unavailable", "la opción no trajo reproductor", {
-      userMessage: tr(
-        "Esta opción ya no está disponible en el sitio. Prueba otra opción del capítulo.",
-        "This option is no longer available on the site. Try another option for this episode."
-      ),
-    });
-  }
-  log("df api post=" + opt.post + " nume=" + opt.nume + " embed=" + embed.slice(0, 60));
-  const stream = await dfCapture(embed, captureMs);
-  stream.label = opt.lang + " · " + opt.name;
-  return stream;
-}
-
-function dfNoVideo(opts) {
-  return kino.error("unavailable", "doramafox sin video", {
-    userMessage: tr(
-      "Ninguna opción de este capítulo entregó el video. Busca el título en Doramed Play.",
-      "No option for this episode returned the video. Search the title on Doramed Play."
-    ),
-  });
-}
-
 export async function resolve(ref) {
   await null; // las validaciones de abajo pueden lanzar: nunca antes del primer await
   const raw = String(ref || "");
@@ -901,14 +551,6 @@ export async function resolve(ref) {
     return okResolve(id);
   }
 
-  // Copia perezosa de una opción de DoramasFox (o cambio automático a otra opción).
-  if (raw.startsWith("dfopt|")) {
-    const parts = raw.slice(6).split("|");
-    if (parts.length !== 3) throw kino.error("not_found", "opción de doramafox inválida");
-    const opt = { post: parts[0], type: parts[1], nume: parts[2], lang: tr("Otra opción", "Other option"), name: "" };
-    return dfTryOption(opt);
-  }
-
   // Dorama Express: su video está detrás de candados del sitio (espera, VIP, ruleta).
   // El plugin no los salta; la persona puede buscar la misma serie en Doramed Play.
   if (raw.startsWith("dx|")) {
@@ -918,57 +560,6 @@ export async function resolve(ref) {
         "Dorama Express only plays on its own site, with waits and ads. Search the title again: if it is on Doramed Play, it plays here."
       ),
     });
-  }
-
-  // DoramasFox: página de un capítulo o película; se prueban sus opciones en orden
-  // (Latino primero) hasta que una entregue el video. Las demás quedan como alternativas.
-  if (raw.startsWith("df|")) {
-    const html = await getHtml(raw.slice(3));
-    const all = dfOptions(html);
-    const opts = all.filter((o) => o.lang === "Latino"); // solo audio latino
-    if (!all.length) {
-      throw kino.error("unavailable", "doramafox sin opciones", {
-        userMessage: tr(
-          "Este título no tiene reproductores disponibles. Prueba otra opción o busca el título de nuevo.",
-          "This title has no available players. Try another option or search the title again."
-        ),
-      });
-    }
-    if (!opts.length) {
-      throw kino.error("unavailable", "doramafox sin audio latino", {
-        userMessage: tr(
-          "Este título no tiene audio latino en esta fuente. Busca el título en Doramed Play.",
-          "This title has no Latin Spanish audio on this source. Search the title on Doramed Play."
-        ),
-      });
-    }
-    let lastErr = null;
-    const t0 = Date.now();
-    // resolve tiene 20 s en total. Con varias opciones cada una tiene ~8 s (así se prueban todas);
-    // con una sola se le da hasta 15 s. No se empieza otra opción si ya no alcanza.
-    const each = opts.length > 1 ? 8000 : 15000;
-    for (const opt of opts.slice(0, 3)) {
-      const left = 17000 - (Date.now() - t0);
-      if (left < 5000) break;
-      try {
-        const stream = await dfTryOption(opt, Math.min(each, left - 1500));
-        const alts = [];
-        for (const o of opts) {
-          if (o === opt) continue;
-          alts.push({
-            label: o.lang + " · " + o.name,
-            ref: "dfopt|" + o.post + "|" + o.type + "|" + o.nume,
-          });
-        }
-        if (alts.length) stream.alternatives = alts.slice(0, 8);
-        return stream;
-      } catch (e) {
-        lastErr = e;
-        log("df opción falló post=" + opt.post + " nume=" + opt.nume + " motivo=" + String((e && (e.code || e.message)) || e).slice(0, 80));
-        // blocked, busy o timeout del reproductor: se prueba la siguiente opción.
-      }
-    }
-    throw dfNoVideo(opts);
   }
 
   if (!raw.startsWith("dm|")) throw kino.error("not_found", "referencia desconocida");
@@ -1025,10 +616,11 @@ export async function resolve(ref) {
       if (h && found.indexOf(h) < 0) found.push(h);
     }
     log("resolve: reproductores=" + found.join(","));
+    const extra = found.length ? " [" + found.slice(0, 3).join(", ") + "]" : "";
     throw kino.error("unavailable", "sin video directo", {
       userMessage: tr(
-        "Este capítulo solo está en reproductores que el plugin no puede abrir. Prueba otra opción del capítulo o busca el título de nuevo.",
-        "This episode is only on players the plugin can't open. Try another option or search the title again."
+        "Este capítulo solo está en reproductores que el plugin no puede abrir. Prueba otra opción del capítulo o busca el título de nuevo." + extra,
+        "This episode is only on players the plugin can't open. Try another option or search the title again." + extra
       ),
     });
   }
