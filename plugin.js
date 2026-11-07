@@ -812,9 +812,23 @@ async function dfCapture(embedUrl, ms) {
     });
   }
   // headers: Referer de la página del sitio para la primera carga del reproductor.
-  const page = await kino.browser.capture(embedUrl, { timeoutMs: ms || 12000, headers: { Referer: DF + "/" } });
+  const copts = { timeoutMs: ms || 12000, headers: { Referer: DF + "/" } };
+  // DIAGNÓSTICO: con captureAll (Kino 0.9.54+) y returnCookiesOnTimeout, al agotarse el tiempo Kino
+  // devuelve las peticiones que hizo la página en vez de fallar; se anotan en el registro.
+  const diag = kino.browser.captureAll === true;
+  if (diag) { copts.captureAll = true; copts.returnCookiesOnTimeout = true; }
+  const page = await kino.browser.capture(embedUrl, copts);
   const media = (page && Array.isArray(page.media) && page.media.length) ? page.media : [];
-  log("df captura media=" + media.length + " timedOut=" + !!(page && page.timedOut));
+  log("df captura media=" + media.length + " timedOut=" + !!(page && page.timedOut) + " diag=" + diag);
+  if (page && Array.isArray(page.requests)) {
+    log("df req total=" + page.requests.length);
+    for (const q of page.requests.slice(0, 25)) {
+      try {
+        const u = new URL(q.url);
+        log("df req " + q.method + " " + u.host + u.pathname.slice(0, 60));
+      } catch (e) { /* url rara: se salta */ }
+    }
+  }
   const first = media.find((x) => x && typeof x.url === "string" && /^https?:\/\//.test(x.url));
   if (!first) {
     throw kino.error("unavailable", "captura sin video", {
