@@ -926,13 +926,14 @@ export async function resolve(ref) {
     }
     let lastErr = null;
     const t0 = Date.now();
+    // resolve tiene 20 s en total. Con varias opciones cada una tiene ~8 s (así se prueban todas);
+    // con una sola se le da hasta 15 s. No se empieza otra opción si ya no alcanza.
+    const each = opts.length > 1 ? 8000 : 15000;
     for (const opt of opts.slice(0, 3)) {
-      // resolve tiene 20 s en total: la captura usa el tiempo que quede (máx. 15 s) y no se
-      // empieza otra opción si ya no alcanza.
       const left = 17000 - (Date.now() - t0);
       if (left < 5000) break;
       try {
-        const stream = await dfTryOption(opt, Math.min(15000, left - 2000));
+        const stream = await dfTryOption(opt, Math.min(each, left - 1500));
         const alts = [];
         for (const o of opts) {
           if (o === opt) continue;
@@ -949,7 +950,7 @@ export async function resolve(ref) {
         // blocked, busy o timeout del reproductor: se prueba la siguiente opción.
       }
     }
-    throw lastErr || dfNoVideo(opts);
+    throw dfNoVideo(opts);
   }
 
   if (!raw.startsWith("dm|")) throw kino.error("not_found", "referencia desconocida");
