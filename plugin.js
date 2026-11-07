@@ -811,8 +811,10 @@ async function dfCapture(embedUrl, ms) {
       ),
     });
   }
-  const page = await kino.browser.capture(embedUrl, { timeoutMs: ms || 12000 });
+  // headers: Referer de la página del sitio para la primera carga del reproductor.
+  const page = await kino.browser.capture(embedUrl, { timeoutMs: ms || 12000, headers: { Referer: DF + "/" } });
   const media = (page && Array.isArray(page.media) && page.media.length) ? page.media : [];
+  log("df captura media=" + media.length + " timedOut=" + !!(page && page.timedOut));
   const first = media.find((x) => x && typeof x.url === "string" && /^https?:\/\//.test(x.url));
   if (!first) {
     throw kino.error("unavailable", "captura sin video", {
@@ -823,7 +825,10 @@ async function dfCapture(embedUrl, ms) {
     });
   }
   const out = { url: first.url };
-  if (first.mimeType) out.mime = first.mimeType;
+  // El video suele exigir el Referer y el User-Agent con que lo pidió el reproductor: se pasan tal cual.
+  if (first.headers && typeof first.headers === "object" && Object.keys(first.headers).length) out.headers = first.headers;
+  if (first.mime) out.mime = first.mime;
+  else if (first.mimeType) out.mime = first.mimeType;
   else if (/\.m3u8(\?|$)/i.test(first.url)) out.mime = "application/x-mpegurl";
   else out.mime = "video/mp4";
   if (page.subtitles && page.subtitles.es) out.subtitles = { es: page.subtitles.es };
