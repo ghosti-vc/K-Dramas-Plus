@@ -816,10 +816,14 @@ async function dfCapture(embedUrl, ms) {
   // DIAGNÓSTICO: con captureAll (Kino 0.9.54+) y returnCookiesOnTimeout, al agotarse el tiempo Kino
   // devuelve las peticiones que hizo la página en vez de fallar; se anotan en el registro.
   const diag = kino.browser.captureAll === true;
-  if (diag) { copts.captureAll = true; copts.returnCookiesOnTimeout = true; }
+  // alsoMatch ["."]: recoge TODAS las peticiones (máx. 20), no solo las que parecen video.
+  if (diag) { copts.captureAll = true; copts.returnCookiesOnTimeout = true; copts.alsoMatch = ["."]; }
   const page = await kino.browser.capture(embedUrl, copts);
   const media = (page && Array.isArray(page.media) && page.media.length) ? page.media : [];
   log("df captura media=" + media.length + " timedOut=" + !!(page && page.timedOut) + " diag=" + diag);
+  if (page && page.finalUrl) {
+    try { const fu = new URL(page.finalUrl); log("df final " + fu.host + fu.pathname.slice(0, 40)); } catch (e) { /* url rara */ }
+  }
   if (page && Array.isArray(page.requests)) {
     log("df req total=" + page.requests.length);
     for (const q of page.requests.slice(0, 25)) {
